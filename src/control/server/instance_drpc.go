@@ -39,6 +39,10 @@ import (
 	"github.com/daos-stack/daos/src/control/system"
 )
 
+var (
+	dRPCNotReady = errors.New("no dRPC client set (data plane not started?)")
+)
+
 func (srv *IOServerInstance) setDrpcClient(c drpc.DomainSocketClient) {
 	srv.Lock()
 	defer srv.Unlock()
@@ -49,7 +53,7 @@ func (srv *IOServerInstance) getDrpcClient() (drpc.DomainSocketClient, error) {
 	srv.RLock()
 	defer srv.RUnlock()
 	if srv._drpcClient == nil {
-		return nil, errors.New("no dRPC client set (data plane not started?)")
+		return nil, dRPCNotReady
 	}
 	return srv._drpcClient, nil
 }
