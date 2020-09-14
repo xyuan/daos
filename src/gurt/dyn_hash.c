@@ -37,7 +37,7 @@
 
 typedef struct dh_field
 {
-	unit64_t	siphash;
+	uint64_t	siphash;
 	void 		*record;
 } dh_field_t;
 
@@ -138,7 +138,7 @@ vec_destroy (dh_vector_t *vec)
 	}
 }
 static inline int
-vec_add (dh_vector_t *vec, void **in_data, U32 len)
+vec_add (dh_vector_t *vec, void **in_data, uint32_t len)
 {
 	int 	rc = 0;
 	size_t 	size = vec->size;
@@ -164,7 +164,7 @@ vec_expand (dh_vector_t *vec)
 	size_t	size = vec->size;
 	void	**data;
 
-	D_ALLOC_ARRAY(**data, size * 2 / sizeof (void*));
+	D_ALLOC(data, size * 2);
 	if (data == NULL) {
 		D_GOTO(out, rc = -DER_NOMEM);
 	}
@@ -172,7 +172,7 @@ vec_expand (dh_vector_t *vec)
 	vec->data = data;
 	vec->size *= 2;
 	vec->counter *= 2;
-out
+out:
 	return rc;
 }
 
@@ -215,7 +215,7 @@ spinlock(struct dyn_hash *htable)
 static inline void
 rw_unlock(struct dyn_hash *htable)
 {
-	D_RWLOCK_UNLOCK(&htable->ht_lock.mutex);
+	D_RWLOCK_UNLOCK(&htable->ht_lock.rwlock);
 }
 static inline void
 mutex_unlock(struct dyn_hash *htable)
@@ -237,7 +237,7 @@ destroy_bucket_locks(struct dyn_hash *htable, uint32_t limit)
 	uint32_t	idx;
 
 	for (idx = 0; idx < limit; idx++) {
-		D_MUTEX_DESTROY(&htable->ht_bucket_locks[idx]);
+		D_MUTEX_DESTROY(&htable->ht_bmutex[idx]);
 	}
 }
 /*----------Public API-------------------------*/
@@ -276,7 +276,7 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 	htable->bucket_unlock = no_bucket_lock;
 
 	/* set global lock */
-	htable->ht_write_loc = no_global_lock;
+	htable->ht_write_lock = no_global_lock;
 	htable->ht_read_lock = no_global_lock;
 	if (!(feats & DYN_HASH_FT_NOLOCK)) {
 		if (feats & DYN_HASH_FT_MUTEX) {
@@ -286,7 +286,7 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 			}
 			htable->ht_write_lock = mutex_lock;
 			htable->ht_read_lock = mutex_lock;
-			htable->ht_rw_unlock = mutex_unlock
+			htable->ht_rw_unlock = mutex_unlock;
 		} else if (feats & DYN_HASH_FT_RWLOCK) {
 			rc = D_RWLOCK_INIT(&htable->ht_lock.rwlock, NULL);
 			if( rc != 0 ){
@@ -315,7 +315,7 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 			D_GOTO(out3, rc = -DER_NOMEM);
 		}
 		for(idx = 0; idx < htable->ht_bucket_locks; idx++) {
-		        rc = D_MUTEX_INIT(&htable->ht_bucket_locks[idx], NULL);
+		        rc = D_MUTEX_INIT(&htable->ht_bmutex[idx], NULL);
 		        if (rc != 0) {
 		        	destroy_bucket_locks(htable, idx);
 		        }
@@ -334,11 +334,11 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 	htable->ht_vector.counter = DYNHASH_BUCKET;
 
 	/* allocate bucket */
-	D_ALLOC(bucket);
+	D_ALLOC(bucket, sizeof *bucket);
 	if (bucket  == NULL) {
 		D_GOTO(out1, rc = -DER_NOMEM);
 	}
-	memset(bucket, 0, sizeof *rec);
+	memset(bucket, 0, sizeof *bucket);
 
 	/* set bucket pointer to vector */
 	for (idx = 0; idx < htable->ht_vector.counter; idx++) {
