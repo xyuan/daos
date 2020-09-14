@@ -220,29 +220,43 @@ typedef struct dh_vector {
 } dh_vector_t;
 
 struct dyn_hash {
-	/** bits to generate number of bucket mutexes */
-	uint32_t		ht_bits;
 	/** feature bits */
-	uint32_t 		ht_feats;
+	uint32_t 	ht_feats;
 	/** SIP hash right shift for vector index calculation */
-	uint8_t 		ht_shift;
+	uint8_t 	ht_shift;
 	/** total number of hash records */
-	uint32_t 		ht_nr_max;
+	uint32_t 	ht_records;
 	/** vector (bucket pointer) */
-	dh_vector_t 		ht_vector;
+	dh_vector_t 	ht_vector;
 	/** different type of locks based on ht_feats */
 	union dyn_hash_lock	ht_lock;
 	/** customized member functions */
 	dyn_hash_ops_t	*ht_ops;
+	/** virtual internal global write lock function */
+	void 		(*ht_write_lock)(struct dyn_hash *htable);
+	/** virtual internal global read lock function */
+	void            (*ht_read_lock)(struct dyn_hash *htable);
+	/** virtual internal global unlock function */
+	void            (*ht_rw_unlock)(struct dyn_hash *htable);
+	/** virtual internal bucket lock function */
+	void		(*bucket_lock)(struct dyn_hash *htable, uint32_t lock_index);
+	/** virtual internal bucket unlock function */
+	void		(*bucket_unlock)(struct dyn_hash *htable, uint32_t lock_index);
+	/** hash table magic signature */
+	uint32_t        ht_magic;
+	/** number of bucket locks in the array */
+	uint32_t	ht_bucket_locks;
+	/** bucket locks array */
+	pthread_mutex_t	*ht_bmutex;
 #if D_HASH_DEBUG
 	/** number of vector splits 
 	 * (updated only if DYN_HASH_FT_SHRING not set)
 	 */
-	uint32_t		ht_vsplits;
+	uint32_t	ht_vsplits;
 	/** accumulated vector spit time (usec) 
 	 * (updated only if DYN_HASH_FT_SHRING not set)
 	 */
-	uint32_t        	ht_vsplit_delay;	
+	uint32_t        ht_vsplit_delay;
 #endif
 };
 
@@ -255,7 +269,7 @@ struct dyn_hash {
  * \param[in] feats		Feature bits, see DYN_HASH_FT_*
  * \param[in] bits		power2 (bits) for number of bucket mutexes
  *                      (ignored if DYN_HASH_FT_GLOCK is set)
-  * \param[in] hops		Customized member functions
+ * \param[in] hops		Customized member functions
  * \param[out] htable_pp	The newly created hash table
  *
  * \return			0 on success, negative value on error
