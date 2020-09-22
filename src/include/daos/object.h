@@ -454,7 +454,7 @@ static inline void
 daos_recx_ep_free(struct daos_recx_ep_list *list)
 {
 	if (list->re_items != NULL)
-		D_FREE(list->re_items);
+		D_MM_FREE(list->re_items);
 	list->re_nr = 0;
 	list->re_total = 0;
 }
@@ -469,7 +469,7 @@ daos_recx_ep_list_free(struct daos_recx_ep_list *list, unsigned int nr)
 
 	for (i = 0; i < nr; i++)
 		daos_recx_ep_free(&list[i]);
-	D_FREE(list);
+	D_MM_FREE(list);
 }
 
 static inline int
@@ -481,9 +481,9 @@ daos_recx_ep_add(struct daos_recx_ep_list *list, struct daos_recx_ep *recx)
 	if (list->re_total == list->re_nr) {
 		nr = (list->re_total == 0) ? 8 : (2 * list->re_total);
 		if (list->re_total == 0)
-			D_ALLOC_ARRAY(new_items, nr);
+			D_MM_ALLOC_ARRAY(new_items, nr);
 		else
-			D_REALLOC_ARRAY(new_items, list->re_items, nr);
+			D_MM_REALLOC_ARRAY(new_items, list->re_items, nr);
 		if (new_items == NULL)
 			return -DER_NOMEM;
 		list->re_items = new_items;
