@@ -249,15 +249,6 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 			return err
 		}
 
-		srv.OnReady(func(ctx context.Context) error {
-			if !mgmtSvc.sysdb.IsLeader() {
-				return nil
-			}
-
-			mgmtSvc.requestGroupUpdate(ctx)
-			return nil
-		})
-
 		if idx == 0 {
 			netDevClass, err = cfg.getDeviceClassFn(srvCfg.Fabric.Interface)
 			if err != nil {
@@ -267,13 +258,34 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 			// Start the system db after instance 0's SCM is
 			// ready.
 			var once sync.Once
-			srv.OnStorageReady(func() (err error) {
+			srv.OnStorageReady(func(ctx context.Context) (err error) {
 				once.Do(func() {
 					err = errors.Wrap(sysdb.Start(ctx, controlAddr),
 						"failed to start system db",
 					)
 				})
 				return
+			})
+
+			// Trigger a group update after instance 0 is ready, if this
+			// server is a MS replica. We could use any instance, but
+			// it's simplest to just wait until instance 0 is ready to keep
+			// the error handling simpler and easier to reason about.
+			srv.OnReady(func(ctx context.Context) error {
+				if !mgmtSvc.sysdb.IsLeader() {
+					return nil
+				}
+
+				err := mgmtSvc.doGroupUpdate(ctx)
+				switch err {
+				// An empty GroupMap is not an error at this point
+				// because we may still be in wire-up rather than restarting
+				// an existing cluster.
+				case nil, system.ErrEmptyGroupMap:
+					return nil
+				default:
+					return mgmtSvc.sysdb.ResignLeadership(err)
+				}
 			})
 		}
 	}
@@ -341,10 +353,23 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 		NetDevClass:     netDevClass,
 	}
 	mgmtpb.RegisterMgmtSvcServer(grpcServer, mgmtSvc)
-	sysdb.OnLeaderGained(func(ctx context.Context) error {
+	sysdb.OnLeadershipGained(func(ctx context.Context) error {
 		log.Infof("MS leader running on %s", hostname())
-		mgmtSvc.startUpdateLoop(ctx)
+		membership.StartJoinLoop(ctx)
 		return nil
+	})
+	sysdb.OnLeadershipLost(func() error {
+		log.Infof("MS leader no longer running on %s", hostname())
+		return nil
+	})
+	sysdb.OnGroupMapChanged(func(ctx context.Context) error {
+		err := mgmtSvc.doGroupUpdate(ctx)
+		switch err {
+		case nil, instanceNotReady: // try again later
+			return nil
+		default:
+			return mgmtSvc.sysdb.ResignLeadership(err)
+		}
 	})
 
 	go func() {

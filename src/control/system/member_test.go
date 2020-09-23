@@ -24,6 +24,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"reflect"
@@ -98,7 +99,7 @@ func TestSystem_Membership_Get(t *testing.T) {
 
 			ms := NewMembership(log, MockDatabase(t, log))
 
-			if _, err := ms.Add(tc.memberToAdd); err != nil {
+			if _, err := ms.Add(context.TODO(), tc.memberToAdd); err != nil {
 				t.Fatal(err)
 			}
 
@@ -160,7 +161,7 @@ func TestSystem_Membership_AddRemove(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for i, m := range tc.membersToAdd {
-				count, err = ms.Add(m)
+				count, err = ms.Add(context.TODO(), m)
 				CmpErr(t, tc.expAddErrs[i], err)
 				if tc.expAddErrs[i] != nil {
 					return
@@ -170,7 +171,7 @@ func TestSystem_Membership_AddRemove(t *testing.T) {
 			AssertEqual(t, len(tc.membersToAdd), count, name)
 
 			for _, r := range tc.ranksToRemove {
-				ms.Remove(r)
+				ms.Remove(context.TODO(), r)
 			}
 
 			count, err = ms.Count()
@@ -238,7 +239,7 @@ func TestSystem_Membership_AddOrReplace(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for _, m := range tc.membersToAddOrReplace {
-				if err := ms.AddOrReplace(m); err != nil {
+				if err := ms.AddOrReplace(context.TODO(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -337,7 +338,7 @@ func TestSystem_Membership_HostRanks(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for _, m := range tc.members {
-				if _, err := ms.Add(m); err != nil {
+				if _, err := ms.Add(context.TODO(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -417,7 +418,7 @@ func TestSystem_Membership_CheckRanklist(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for _, m := range tc.members {
-				if _, err := ms.Add(m); err != nil {
+				if _, err := ms.Add(context.TODO(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -566,7 +567,7 @@ func TestSystem_Membership_CheckHostlist(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for _, m := range tc.members {
-				if _, err := ms.Add(m); err != nil {
+				if _, err := ms.Add(context.TODO(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -718,13 +719,13 @@ func TestSystem_Membership_UpdateMemberStates(t *testing.T) {
 			ms := NewMembership(log, MockDatabase(t, log))
 
 			for _, m := range tc.members {
-				if _, err := ms.Add(m); err != nil {
+				if _, err := ms.Add(context.TODO(), m); err != nil {
 					t.Fatal(err)
 				}
 			}
 
 			// members should be updated with result state
-			err := ms.UpdateMemberStates(tc.results, !tc.ignoreErrs)
+			err := ms.UpdateMemberStates(context.TODO(), tc.results, !tc.ignoreErrs)
 			ExpectError(t, err, tc.expErrMsg, name)
 			if err != nil {
 				return

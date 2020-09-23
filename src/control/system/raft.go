@@ -24,6 +24,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"time"
@@ -58,14 +59,52 @@ type raftUpdate struct {
 	Data json.RawMessage
 }
 
+type memberUpdate struct {
+	Member   *Member
+	NextRank bool
+}
+
 var raftTimeout = 1 * time.Second
 
-func (db *Database) submitMemberUpdate(op raftOp, m *Member) error {
+// ResignLeadership causes this instance to give up its raft
+// leadership state.
+func (db *Database) ResignLeadership(cause error) error {
+	// NB: This is effectively a no-op in this version because
+	// there is no one to take over! If no replicas are detected,
+	// the raft service continues to run. Leaving this enabled
+	// so that we can see it in logs in case there are unexpected
+	// resignation events.
+	db.log.Debugf("resigning leadership (%s)", cause)
+	if err := db.raft.LeadershipTransfer().Error(); err != nil {
+		return errors.Wrap(err, cause.Error())
+	}
+	return cause
+}
+
+func (db *Database) submitMemberUpdate(ctx context.Context, op raftOp, m *memberUpdate) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	return db.submitRaftUpdate(op, data)
+	if err := db.submitRaftUpdate(op, data); err != nil {
+		return err
+	}
+
+	// If the group map has changed (determined based on the following
+	// criteria), then we need to fire off the callbacks associated with
+	// this event.
+	groupMapChanged := m.NextRank
+	if !groupMapChanged {
+		return nil
+	}
+
+	for _, fn := range db.onGroupMapChanged {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (db *Database) submitPoolUpdate(op raftOp, ps *PoolService) error {
@@ -90,7 +129,7 @@ func (db *Database) submitRaftUpdate(op raftOp, data []byte) error {
 }
 
 func (d *dbData) applyMemberUpdate(op raftOp, data []byte) {
-	m := new(Member)
+	m := new(memberUpdate)
 	if err := json.Unmarshal(data, m); err != nil {
 		d.log.Errorf("failed to decode member update: %s", err)
 		return
@@ -101,24 +140,27 @@ func (d *dbData) applyMemberUpdate(op raftOp, data []byte) {
 
 	switch op {
 	case raftOpAddMember:
-		d.Members.addMember(m)
+		d.Members.addMember(m.Member)
 		d.log.Debugf("added member: %+v", m)
 	case raftOpUpdateMember:
-		cur, found := d.Members.Uuids[m.UUID]
+		cur, found := d.Members.Uuids[m.Member.UUID]
 		if !found {
 			d.log.Errorf("member update for unknown member %+v", m)
 		}
-		cur.state = m.state
-		cur.Info = m.Info
+		cur.state = m.Member.state
+		cur.Info = m.Member.Info
 		d.log.Debugf("updated member: %+v", m)
 	case raftOpRemoveMember:
-		d.Members.removeMember(m)
+		d.Members.removeMember(m.Member)
 		d.log.Debugf("removed %+v", m)
 	default:
 		d.log.Errorf("unhandled Member Apply operation: %d", op)
 		return
 	}
 
+	if m.NextRank {
+		d.NextRank++
+	}
 	d.MapVersion++
 }
 

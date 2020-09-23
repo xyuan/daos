@@ -44,7 +44,7 @@ import (
 	"github.com/daos-stack/daos/src/control/system"
 )
 
-type onStorageReadyFn func() error
+type onStorageReadyFn func(ctx context.Context) error
 type onReadyFn func(ctx context.Context) error
 
 // IOServerInstance encapsulates control-plane specific configuration
@@ -122,14 +122,14 @@ func (srv *IOServerInstance) isMSReplica() bool {
 
 // OnStorageReady adds a list of callbacks to invoke when the instance
 // storage becomes ready.
-func (srv *IOServerInstance) OnStorageReady(fn onStorageReadyFn) {
-	srv.onStorageReady = append(srv.onStorageReady, fn)
+func (srv *IOServerInstance) OnStorageReady(fns ...onStorageReadyFn) {
+	srv.onStorageReady = append(srv.onStorageReady, fns...)
 }
 
 // OnReady adds a list of callbacks to invoke when the instance
 // becomes ready.
-func (srv *IOServerInstance) OnReady(fn onReadyFn) {
-	srv.onReady = append(srv.onReady, fn)
+func (srv *IOServerInstance) OnReady(fns ...onReadyFn) {
+	srv.onReady = append(srv.onReady, fns...)
 }
 
 // LocalState returns local perspective of the current instance state
@@ -415,17 +415,4 @@ func (srv *IOServerInstance) newMember() (*system.Member, error) {
 	}
 
 	return system.NewMember(rank, sb.UUID, sb.URI, addr, system.MemberStateJoined), nil
-}
-
-// registerMember creates a new system.Member for given instance and adds it
-// to the system membership.
-func (srv *IOServerInstance) registerMember(membership *system.Membership) error {
-	idx := srv.Index()
-
-	m, err := srv.newMember()
-	if err != nil {
-		return errors.Wrapf(err, "instance %d: failed to extract member details", idx)
-	}
-
-	return membership.AddOrReplace(m)
 }

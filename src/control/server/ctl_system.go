@@ -166,7 +166,7 @@ func (svc *ControlService) rpcFanout(parent context.Context, fanReq fanoutReques
 			hitRanks.Count(), len(resp.Results))
 	}
 
-	if err = svc.membership.UpdateMemberStates(resp.Results, updateOnFail); err != nil {
+	if err = svc.membership.UpdateMemberStates(ctx, resp.Results, updateOnFail); err != nil {
 		return nil, nil, err
 	}
 

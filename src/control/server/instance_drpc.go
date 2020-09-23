@@ -40,7 +40,8 @@ import (
 )
 
 var (
-	dRPCNotReady = errors.New("no dRPC client set (data plane not started?)")
+	dRPCNotReady     = errors.New("no dRPC client set (data plane not started?)")
+	instanceNotReady = errors.New("instance not ready yet")
 )
 
 func (srv *IOServerInstance) setDrpcClient(c drpc.DomainSocketClient) {
@@ -85,6 +86,11 @@ func (srv *IOServerInstance) CallDrpc(ctx context.Context, method drpc.Method, b
 		return nil, err
 	}
 
+	rankMsg := ""
+	if sb := srv.getSuperblock(); sb != nil {
+		rankMsg = fmt.Sprintf(" (rank %s)", sb.Rank)
+	}
+	srv.log.Debugf("dRPC to index %d%s: %s", srv.Index(), rankMsg, method)
 	return makeDrpcCall(ctx, srv.log, dc, method, body)
 }
 

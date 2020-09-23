@@ -105,51 +105,6 @@ func getPeerListenAddr(ctx context.Context, listenAddrStr string) (*net.TCPAddr,
 		net.JoinHostPort(tcpAddr.IP.String(), portStr))
 }
 
-const (
-	updateCheckTimeout = 1 * time.Second
-)
-
-func (svc *mgmtSvc) groupUpdateLoop(ctx context.Context) {
-	var updateRequested bool
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(updateCheckTimeout):
-			if !updateRequested {
-				continue
-			}
-			svc.log.Debug("starting group update")
-			if err := svc.doGroupUpdate(ctx); err != nil {
-				svc.log.Error(errors.Wrap(err, "group update failed").Error())
-				if err == system.ErrEmptyGroupMap {
-					updateRequested = false
-				}
-				continue
-			}
-			svc.log.Debug("finished group update")
-			updateRequested = false
-		case <-svc.updateReqChan:
-			svc.log.Debug("received group update request")
-			updateRequested = true
-		}
-	}
-}
-
-func (svc *mgmtSvc) startUpdateLoop(ctx context.Context) {
-	go svc.groupUpdateLoop(ctx)
-}
-
-func (svc *mgmtSvc) requestGroupUpdate(ctx context.Context) {
-	go func(ctx context.Context) {
-		select {
-		case <-ctx.Done():
-		case svc.updateReqChan <- struct{}{}:
-			svc.log.Debug("requested group update")
-		}
-	}(ctx)
-}
-
 func (svc *mgmtSvc) doGroupUpdate(ctx context.Context) error {
 	gm, err := svc.sysdb.GroupMap()
 	if err != nil {
@@ -215,7 +170,7 @@ func (svc *mgmtSvc) Join(ctx context.Context, req *mgmtpb.JoinReq) (*mgmtpb.Join
 		return nil, errors.Wrapf(err, "invalid uuid %q", req.GetUuid())
 	}
 
-	joinResponse, err := svc.membership.Join(&system.JoinRequest{
+	joinResponse, err := svc.membership.Join(ctx, &system.JoinRequest{
 		Rank:           system.Rank(req.Rank),
 		UUID:           uuid,
 		ControlAddr:    replyAddr,
@@ -237,9 +192,6 @@ func (svc *mgmtSvc) Join(ctx context.Context, req *mgmtpb.JoinReq) (*mgmtpb.Join
 				member.Rank, joinResponse.PrevState, member.State())
 		}
 	}
-
-	svc.requestGroupUpdate(ctx)
-	svc.log.Debugf("requested group update after rank %d joined", member.Rank)
 
 	return &mgmtpb.JoinResp{
 		State: mgmtpb.JoinResp_IN,

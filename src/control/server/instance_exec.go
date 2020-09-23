@@ -150,7 +150,7 @@ func (srv *IOServerInstance) run(ctx context.Context, membership *system.Members
 	// After we know that the instance storage is ready, fire off
 	// any callbacks that were waiting for this state.
 	for _, readyFn := range srv.onStorageReady {
-		if err := readyFn(); err != nil {
+		if err := readyFn(ctx); err != nil {
 			return err
 		}
 	}
@@ -158,12 +158,6 @@ func (srv *IOServerInstance) run(ctx context.Context, membership *system.Members
 	if err = srv.start(ctx, errChan); err != nil {
 		return
 	}
-	/*if srv.isMSReplica() {
-		// MS bootstrap will not join so register manually
-		if err := srv.registerMember(membership); err != nil {
-			return err
-		}
-	}*/
 	srv.waitDrpc.SetTrue()
 
 	if err = srv.waitReady(ctx, errChan); err != nil {

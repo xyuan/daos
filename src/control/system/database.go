@@ -46,7 +46,9 @@ const (
 )
 
 type (
-	onLeaderGainedFn func(context.Context) error
+	onLeadershipGainedFn func(context.Context) error
+	onLeadershipLostFn   func() error
+	onGroupMapChangedFn  func(context.Context) error
 
 	dbData struct {
 		log logging.Logger
@@ -61,13 +63,15 @@ type (
 
 	Database struct {
 		sync.Mutex
-		log            logging.Logger
-		cfg            *DatabaseConfig
-		isReplica      bool
-		resolveTCPAddr func(string, string) (*net.TCPAddr, error)
-		interfaceAddrs func() ([]net.Addr, error)
-		raft           *raft.Raft
-		onLeaderGained []onLeaderGainedFn
+		log                logging.Logger
+		cfg                *DatabaseConfig
+		isReplica          bool
+		resolveTCPAddr     func(string, string) (*net.TCPAddr, error)
+		interfaceAddrs     func() ([]net.Addr, error)
+		raft               *raft.Raft
+		onLeadershipGained []onLeadershipGainedFn
+		onLeadershipLost   []onLeadershipLostFn
+		onGroupMapChanged  []onGroupMapChangedFn
 
 		data *dbData
 	}
@@ -190,10 +194,22 @@ func (db *Database) IsLeader() bool {
 	return db.checkLeader() == nil
 }
 
-// OnLeaderGained registers callbacks to be run when this instance
+// OnLeadershipGained registers callbacks to be run when this instance
 // gains the leadership role.
-func (db *Database) OnLeaderGained(fn onLeaderGainedFn) {
-	db.onLeaderGained = append(db.onLeaderGained, fn)
+func (db *Database) OnLeadershipGained(fns ...onLeadershipGainedFn) {
+	db.onLeadershipGained = append(db.onLeadershipGained, fns...)
+}
+
+// OnLeadershipLost registers callbacks to be run when this instance
+// loses the leadership role.
+func (db *Database) OnLeadershipLost(fns ...onLeadershipLostFn) {
+	db.onLeadershipLost = append(db.onLeadershipLost, fns...)
+}
+
+// OnGroupMapChanged registers callbacks to be run when the system
+// group map changes.
+func (db *Database) OnGroupMapChanged(fns ...onGroupMapChangedFn) {
+	db.onGroupMapChanged = append(db.onGroupMapChanged, fns...)
 }
 
 func (db *Database) Start(ctx context.Context, ctrlAddr *net.TCPAddr) error {
@@ -264,35 +280,42 @@ func (db *Database) Start(ctx context.Context, ctrlAddr *net.TCPAddr) error {
 		}
 
 		// FIXME DAOS-5656: retain dependency on rank 0
-		db.data.NextRank++
+		db.data.NextRank = 1
 	}
 
 	go func(parent context.Context) {
-		var cancel context.CancelFunc
+		var cancelGainedCtx context.CancelFunc
 		for {
 			select {
 			case <-parent.Done():
-				if cancel != nil {
-					cancel()
+				if cancelGainedCtx != nil {
+					cancelGainedCtx()
 				}
 				return
 			case isLeader := <-db.raft.LeaderCh():
 				if !isLeader {
 					db.log.Debugf("node %s lost MS leader state", rc.LocalID)
-					if cancel != nil {
-						cancel()
+					if cancelGainedCtx != nil {
+						cancelGainedCtx()
 					}
+
+					for _, fn := range db.onLeadershipLost {
+						if err := fn(); err != nil {
+							db.log.Errorf("failure in onLeadershipLost callback: %s", err)
+						}
+					}
+
 					return
 				}
 
 				db.log.Debugf("node %s gained MS leader state", rc.LocalID)
-				var ctx context.Context
-				ctx, cancel = context.WithCancel(parent)
-				for _, fn := range db.onLeaderGained {
-					if err := fn(ctx); err != nil {
-						db.log.Errorf("failure in onLeaderGained callback: %s", err)
-						cancel()
-						db.raft.LeadershipTransfer()
+				var gainedCtx context.Context
+				gainedCtx, cancelGainedCtx = context.WithCancel(parent)
+				for _, fn := range db.onLeadershipGained {
+					if err := fn(gainedCtx); err != nil {
+						db.log.Errorf("failure in onLeadershipGained callback: %s", err)
+						cancelGainedCtx()
+						_ = db.ResignLeadership(err)
 						break
 					}
 				}
@@ -401,17 +424,17 @@ func (db *Database) CurMapVersion() (uint32, error) {
 	return db.data.MapVersion, nil
 }
 
-func (db *Database) RemoveMember(m *Member) error {
+func (db *Database) RemoveMember(ctx context.Context, m *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
 	db.Lock()
 	defer db.Unlock()
 
-	return db.submitMemberUpdate(raftOpRemoveMember, m)
+	return db.submitMemberUpdate(ctx, raftOpRemoveMember, &memberUpdate{Member: m})
 }
 
-func (db *Database) AddMember(newMember *Member) error {
+func (db *Database) AddMember(ctx context.Context, newMember *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
@@ -420,43 +443,38 @@ func (db *Database) AddMember(newMember *Member) error {
 
 	db.log.Debugf("add/rejoin: %+v", newMember)
 
+	mu := &memberUpdate{Member: newMember}
 	if cur, err := db.FindMemberByUUID(newMember.UUID); err == nil {
 		if !cur.Rank.Equals(newMember.Rank) {
 			return errors.Errorf("re-joining server %s has different rank (%d != %d)",
 				newMember.UUID, newMember.Rank, cur.Rank)
 		}
 		db.log.Debugf("rank %d rejoined", cur.Rank)
-		return db.submitMemberUpdate(raftOpUpdateMember, newMember)
+		return db.submitMemberUpdate(ctx, raftOpUpdateMember, mu)
 	}
 
-	// TODO: Should we allow the rank to be supplied for a new member?
-	// Removing this breaks the tests, but maybe the tests shouldn't be
-	// specifying rank for new members?
-	needsRank := newMember.Rank.Equals(NilRank)
-	if needsRank {
+	if newMember.Rank.Equals(NilRank) {
 		newMember.Rank = db.data.NextRank
+		mu.NextRank = true
 	}
 
-	if err := db.submitMemberUpdate(raftOpAddMember, newMember); err != nil {
+	if err := db.submitMemberUpdate(ctx, raftOpAddMember, mu); err != nil {
 		return err
 	}
 
 	db.log.Debugf("added rank %d", newMember.Rank)
-	if needsRank {
-		db.data.NextRank++
-	}
 
 	return nil
 }
 
-func (db *Database) UpdateMember(m *Member) error {
+func (db *Database) UpdateMember(ctx context.Context, m *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
 	db.Lock()
 	defer db.Unlock()
 
-	return db.submitMemberUpdate(raftOpUpdateMember, m)
+	return db.submitMemberUpdate(ctx, raftOpUpdateMember, &memberUpdate{Member: m})
 }
 
 func (db *Database) FindMemberByRank(rank Rank) (*Member, error) {
