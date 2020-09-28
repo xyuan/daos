@@ -60,7 +60,9 @@ struct mgmt_grp_up_in {
 	int			gui_n_servers;
 };
 
+/** srv_util.c **/
 int ds_mgmt_group_update_handler(struct mgmt_grp_up_in *in);
+int ds_mgmt_group_bcast_handler(struct mgmt_grp_up_in *in);
 
 /** srv_pool.c */
 int ds_mgmt_create_pool(uuid_t pool_uuid, const char *group, char *tgt_dev,

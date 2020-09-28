@@ -425,6 +425,12 @@ ds_mgmt_group_update_handler(struct mgmt_grp_up_in *in)
 }
 
 int
+ds_mgmt_group_bcast_handler(struct mgmt_grp_up_in *in)
+{
+	return 0;
+}
+
+int
 ds_mgmt_create_pool(uuid_t pool_uuid, const char *group, char *tgt_dev,
 		    d_rank_list_t *targets, size_t scm_size,
 		    size_t nvme_size, daos_prop_t *prop, uint32_t svc_nr,

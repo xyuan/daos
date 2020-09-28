@@ -201,6 +201,62 @@ out:
 	mgmt__group_update_req__free_unpacked(req, &alloc.alloc);
 }
 
+void
+ds_mgmt_drpc_group_bcast(Drpc__Call *drpc_req, Drpc__Response *drpc_resp)
+{
+	struct drpc_alloc	alloc = PROTO_ALLOCATOR_INIT(alloc);
+	Mgmt__GroupUpdateReq	*req = NULL;
+	Mgmt__GroupUpdateResp	resp = MGMT__GROUP_UPDATE_RESP__INIT;
+	struct mgmt_grp_up_in	in = {};
+	uint8_t			*body;
+	size_t			 len;
+	int			 rc, i;
+
+	/* Unpack the inner request from the drpc call body */
+	req = mgmt__group_update_req__unpack(
+		&alloc.alloc, drpc_req->body.len, drpc_req->body.data);
+
+	if (alloc.oom || req == NULL) {
+		drpc_resp->status = DRPC__STATUS__FAILED_UNMARSHAL_PAYLOAD;
+		D_ERROR("Failed to unpack req (group_update)\n");
+		return;
+	}
+
+	D_INFO("Received request to update group map\n");
+
+	D_ALLOC_ARRAY(in.gui_servers, req->n_servers);
+	if (in.gui_servers == NULL) {
+		rc = -DER_NOMEM;
+		goto out;
+	}
+
+	for (i = 0; i < req->n_servers; i++) {
+		in.gui_servers[i].se_rank = req->servers[i]->rank;
+		in.gui_servers[i].se_uri = req->servers[i]->uri;
+	}
+	in.gui_n_servers = req->n_servers;
+	in.gui_map_version = req->map_version;
+
+	rc = ds_mgmt_group_bcast_handler(&in);
+out:
+	if (in.gui_servers != NULL)
+		D_FREE(in.gui_servers);
+
+	resp.status = rc;
+	len = mgmt__group_update_resp__get_packed_size(&resp);
+	D_ALLOC(body, len);
+	if (body == NULL) {
+		drpc_resp->status = DRPC__STATUS__FAILED_MARSHAL;
+		D_ERROR("Failed to allocate drpc response body\n");
+	} else {
+		mgmt__group_update_resp__pack(&resp, body);
+		drpc_resp->body.len = len;
+		drpc_resp->body.data = body;
+	}
+
+	mgmt__group_update_req__free_unpacked(req, &alloc.alloc);
+}
+
 static int
 create_pool_props(daos_prop_t **out_prop, char *owner, char *owner_grp,
 		  const char **ace_list, size_t ace_nr)

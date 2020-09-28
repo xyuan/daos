@@ -357,21 +357,28 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 			return err
 		}
 		membership.StartJoinLoop(ctx, repAddr)
+		mgmtSvc.startBroadcastLoop(ctx)
 		return nil
 	})
 	sysdb.OnLeadershipLost(func() error {
 		log.Infof("MS leader no longer running on %s", hostname())
 		return nil
 	})
-	membership.OnGroupMapChanged(func(ctx context.Context) error {
-		err := mgmtSvc.doGroupUpdate(ctx)
-		switch err {
-		case nil, instanceNotReady: // try again later
+	membership.OnGroupMapChanged(
+		func(ctx context.Context) error {
+			err := mgmtSvc.doGroupUpdate(ctx)
+			switch err {
+			case nil, instanceNotReady: // try again later
+				return nil
+			default:
+				return mgmtSvc.sysdb.ResignLeadership(err)
+			}
+		},
+		func(ctx context.Context) error {
+			mgmtSvc.requestGroupBroadcast(ctx)
 			return nil
-		default:
-			return mgmtSvc.sysdb.ResignLeadership(err)
-		}
-	})
+		},
+	)
 
 	go func() {
 		_ = grpcServer.Serve(lis)

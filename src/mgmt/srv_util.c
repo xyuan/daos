@@ -129,20 +129,21 @@ out:
 int
 ds_mgmt_group_update_handler(struct mgmt_grp_up_in *in)
 {
-	struct dss_module_info *info = dss_get_module_info();
-	int			rc;
-
-	rc = ds_mgmt_group_update(CRT_GROUP_MOD_OP_REPLACE, in->gui_servers,
-				  in->gui_n_servers, in->gui_map_version);
-	if (rc != 0)
-		goto out;
-
-	D_DEBUG(DB_MGMT, "set %d servers in map version %u\n",
+	D_DEBUG(DB_MGMT, "setting %d servers in map version %u\n",
 		in->gui_n_servers, in->gui_map_version);
 
-	rc = map_update_bcast(info->dmi_ctx, in->gui_map_version,
-			      in->gui_n_servers, in->gui_servers);
+	return ds_mgmt_group_update(CRT_GROUP_MOD_OP_REPLACE, in->gui_servers,
+				    in->gui_n_servers, in->gui_map_version);
+}
 
-out:
-	return rc;
+int
+ds_mgmt_group_bcast_handler(struct mgmt_grp_up_in *in)
+{
+	struct dss_module_info *info = dss_get_module_info();
+
+	D_DEBUG(DB_MGMT, "bcasting %d servers in map version %u\n",
+		in->gui_n_servers, in->gui_map_version);
+
+	return map_update_bcast(info->dmi_ctx, in->gui_map_version,
+				in->gui_n_servers, in->gui_servers);
 }

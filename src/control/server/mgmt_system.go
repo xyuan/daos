@@ -105,6 +105,91 @@ func getPeerListenAddr(ctx context.Context, listenAddrStr string) (*net.TCPAddr,
 		net.JoinHostPort(tcpAddr.IP.String(), portStr))
 }
 
+const (
+	broadcastCheckTimeout = 1 * time.Second
+)
+
+func (svc *mgmtSvc) groupBroadcastLoop(ctx context.Context) {
+	var broadcastRequested bool
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(broadcastCheckTimeout):
+			if !broadcastRequested {
+				continue
+			}
+			svc.log.Debug("starting group broadcast")
+			if err := svc.doGroupBroadcast(ctx); err != nil {
+				svc.log.Error(errors.Wrap(err, "group broadcast failed").Error())
+				if err == system.ErrEmptyGroupMap {
+					broadcastRequested = false
+				}
+				continue
+			}
+			svc.log.Debug("finished group broadcast")
+			broadcastRequested = false
+		case <-svc.broadcastReqChan:
+			svc.log.Debug("received group broadcast request")
+			broadcastRequested = true
+		}
+	}
+}
+
+func (svc *mgmtSvc) startBroadcastLoop(ctx context.Context) {
+	go svc.groupBroadcastLoop(ctx)
+}
+
+func (svc *mgmtSvc) requestGroupBroadcast(ctx context.Context) {
+	go func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+		case svc.broadcastReqChan <- struct{}{}:
+			svc.log.Debug("requested group broadcast")
+		}
+	}(ctx)
+}
+
+func (svc *mgmtSvc) doGroupBroadcast(ctx context.Context) error {
+	gm, err := svc.sysdb.GroupMap()
+	if err != nil {
+		return err
+	}
+	if len(gm.RankURIs) == 0 {
+		return system.ErrEmptyGroupMap
+	}
+	req := &mgmtpb.GroupUpdateReq{
+		MapVersion: gm.Version,
+	}
+	rankSet := &system.RankSet{}
+	for rank, uri := range gm.RankURIs {
+		req.Servers = append(req.Servers, &mgmtpb.GroupUpdateReq_Server{
+			Rank: rank.Uint32(),
+			Uri:  uri,
+		})
+		if err := rankSet.Add(rank); err != nil {
+			return errors.Wrap(err, "adding rank to set")
+		}
+	}
+
+	svc.log.Debugf("group broadcast request: version: %d, ranks: %s", req.MapVersion, rankSet)
+	dResp, err := svc.harness.CallDrpc(ctx, drpc.MethodGroupBroadcast, req)
+	if err != nil {
+		svc.log.Errorf("dRPC GroupUpdate call failed: %s", err)
+		return err
+	}
+
+	resp := new(mgmtpb.GroupUpdateResp)
+	if err = proto.Unmarshal(dResp.Body, resp); err != nil {
+		return errors.Wrap(err, "unmarshal GroupBroadcast response")
+	}
+
+	if resp.GetStatus() != 0 {
+		return drpc.DaosStatus(resp.GetStatus())
+	}
+	return nil
+}
+
 func (svc *mgmtSvc) doGroupUpdate(ctx context.Context) error {
 	gm, err := svc.sysdb.GroupMap()
 	if err != nil {

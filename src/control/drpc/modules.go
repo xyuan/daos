@@ -145,6 +145,7 @@ func (m mgmtMethod) String() string {
 		MethodSetRank:         "SetRank",
 		MethodSetUp:           "Setup",
 		MethodGroupUpdate:     "GroupUpdate",
+		MethodGroupBroadcast:  "GroupBroadcast",
 		MethodPoolCreate:      "PoolCreate",
 		MethodPoolDestroy:     "PoolDestroy",
 		MethodPoolEvict:       "PoolEvict",
@@ -233,7 +234,8 @@ const (
 	// MethodContSetOwner defines a method for setting the container's owner
 	MethodContSetOwner mgmtMethod = C.DRPC_METHOD_MGMT_CONT_SET_OWNER
 	// MethodGroupUpdate defines a method for updating the group map
-	MethodGroupUpdate mgmtMethod = C.DRPC_METHOD_MGMT_GROUP_UPDATE
+	MethodGroupUpdate    mgmtMethod = C.DRPC_METHOD_MGMT_GROUP_UPDATE
+	MethodGroupBroadcast mgmtMethod = C.DRPC_METHOD_MGMT_GROUP_BCAST
 )
 
 type srvMethod int32

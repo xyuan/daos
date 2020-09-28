@@ -122,4 +122,7 @@ ds_mgmt_drpc_cont_set_owner(Drpc__Call *drpc_req, Drpc__Response *drpc_resp);
 void
 ds_mgmt_drpc_group_update(Drpc__Call *drpc_req, Drpc__Response *drpc_resp);
 
+void
+ds_mgmt_drpc_group_bcast(Drpc__Call *drpc_req, Drpc__Response *drpc_resp);
+
 #endif /* __MGMT_DRPC_INTERNAL_H__ */
