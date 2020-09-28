@@ -143,7 +143,7 @@ func (m mgmtMethod) String() string {
 		MethodPrepShutdown:    "PrepShutdown",
 		MethodPingRank:        "Ping",
 		MethodSetRank:         "SetRank",
-		MethodSetUp:           "SetUp",
+		MethodSetUp:           "Setup",
 		MethodGroupUpdate:     "GroupUpdate",
 		MethodPoolCreate:      "PoolCreate",
 		MethodPoolDestroy:     "PoolDestroy",

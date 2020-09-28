@@ -48,7 +48,6 @@ const (
 type (
 	onLeadershipGainedFn func(context.Context) error
 	onLeadershipLostFn   func() error
-	onGroupMapChangedFn  func(context.Context) error
 
 	dbData struct {
 		log logging.Logger
@@ -65,13 +64,12 @@ type (
 		sync.Mutex
 		log                logging.Logger
 		cfg                *DatabaseConfig
-		isReplica          bool
+		replicaAddr        *net.TCPAddr
 		resolveTCPAddr     func(string, string) (*net.TCPAddr, error)
 		interfaceAddrs     func() ([]net.Addr, error)
 		raft               *raft.Raft
 		onLeadershipGained []onLeadershipGainedFn
 		onLeadershipLost   []onLeadershipLostFn
-		onGroupMapChanged  []onGroupMapChangedFn
 
 		data *dbData
 	}
@@ -175,8 +173,19 @@ func (db *Database) checkReplica(ctrlAddr *net.TCPAddr) (repAddr *net.TCPAddr, i
 	return
 }
 
+func (db *Database) ReplicaAddr() (*net.TCPAddr, error) {
+	if !db.isReplica() {
+		return nil, &ErrNotReplica{db.cfg.Replicas}
+	}
+	return db.replicaAddr, nil
+}
+
+func (db *Database) isReplica() bool {
+	return db.replicaAddr != nil
+}
+
 func (db *Database) checkLeader() error {
-	if !db.isReplica {
+	if !db.isReplica() {
 		return &ErrNotReplica{db.cfg.Replicas}
 	}
 	if db.raft.State() != raft.Leader {
@@ -206,25 +215,17 @@ func (db *Database) OnLeadershipLost(fns ...onLeadershipLostFn) {
 	db.onLeadershipLost = append(db.onLeadershipLost, fns...)
 }
 
-// OnGroupMapChanged registers callbacks to be run when the system
-// group map changes.
-func (db *Database) OnGroupMapChanged(fns ...onGroupMapChangedFn) {
-	db.onGroupMapChanged = append(db.onGroupMapChanged, fns...)
-}
-
 func (db *Database) Start(ctx context.Context, ctrlAddr *net.TCPAddr) error {
-	var repAddr *net.TCPAddr
 	var isBootStrap, needsBootStrap bool
 	var err error
 
-	repAddr, isBootStrap, err = db.checkReplica(ctrlAddr)
+	db.replicaAddr, isBootStrap, err = db.checkReplica(ctrlAddr)
 	if err != nil {
 		return err
 	}
-	db.isReplica = repAddr != nil
-	db.log.Debugf("system db start: isReplica: %t, isBootStrap: %t", db.isReplica, isBootStrap)
+	db.log.Debugf("system db start: isReplica: %t, isBootStrap: %t", db.isReplica(), isBootStrap)
 
-	if !db.isReplica {
+	if !db.isReplica() {
 		return nil
 	}
 
@@ -245,7 +246,7 @@ func (db *Database) Start(ctx context.Context, ctrlAddr *net.TCPAddr) error {
 	rc.HeartbeatTimeout = 250 * time.Millisecond
 	rc.ElectionTimeout = 250 * time.Millisecond
 	rc.LeaderLeaseTimeout = 125 * time.Millisecond
-	rc.LocalID = raft.ServerID(repAddr.String())
+	rc.LocalID = raft.ServerID(db.replicaAddr.String())
 	// Just use an in-memory transport for the moment, until
 	// we add real replica support over gRPC.
 	_, transport := raft.NewInmemTransport(raft.NewInmemAddr())
@@ -424,17 +425,17 @@ func (db *Database) CurMapVersion() (uint32, error) {
 	return db.data.MapVersion, nil
 }
 
-func (db *Database) RemoveMember(ctx context.Context, m *Member) error {
+func (db *Database) RemoveMember(m *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
 	db.Lock()
 	defer db.Unlock()
 
-	return db.submitMemberUpdate(ctx, raftOpRemoveMember, &memberUpdate{Member: m})
+	return db.submitMemberUpdate(raftOpRemoveMember, &memberUpdate{Member: m})
 }
 
-func (db *Database) AddMember(ctx context.Context, newMember *Member) error {
+func (db *Database) AddMember(newMember *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
@@ -450,7 +451,7 @@ func (db *Database) AddMember(ctx context.Context, newMember *Member) error {
 				newMember.UUID, newMember.Rank, cur.Rank)
 		}
 		db.log.Debugf("rank %d rejoined", cur.Rank)
-		return db.submitMemberUpdate(ctx, raftOpUpdateMember, mu)
+		return db.submitMemberUpdate(raftOpUpdateMember, mu)
 	}
 
 	if newMember.Rank.Equals(NilRank) {
@@ -458,7 +459,7 @@ func (db *Database) AddMember(ctx context.Context, newMember *Member) error {
 		mu.NextRank = true
 	}
 
-	if err := db.submitMemberUpdate(ctx, raftOpAddMember, mu); err != nil {
+	if err := db.submitMemberUpdate(raftOpAddMember, mu); err != nil {
 		return err
 	}
 
@@ -467,14 +468,14 @@ func (db *Database) AddMember(ctx context.Context, newMember *Member) error {
 	return nil
 }
 
-func (db *Database) UpdateMember(ctx context.Context, m *Member) error {
+func (db *Database) UpdateMember(m *Member) error {
 	if err := db.checkLeader(); err != nil {
 		return err
 	}
 	db.Lock()
 	defer db.Unlock()
 
-	return db.submitMemberUpdate(ctx, raftOpUpdateMember, &memberUpdate{Member: m})
+	return db.submitMemberUpdate(raftOpUpdateMember, &memberUpdate{Member: m})
 }
 
 func (db *Database) FindMemberByRank(rank Rank) (*Member, error) {

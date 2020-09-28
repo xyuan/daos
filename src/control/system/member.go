@@ -292,8 +292,9 @@ func (smr MemberResults) HasErrors() bool {
 }
 
 type (
-	joinReqChan  chan *JoinRequest
-	joinRespChan chan *JoinResponse
+	onGroupMapChangedFn func(context.Context) error
+	joinReqChan         chan *JoinRequest
+	joinRespChan        chan *JoinResponse
 )
 
 // Membership tracks details of system members.
@@ -302,7 +303,51 @@ type Membership struct {
 	log logging.Logger
 	db  *Database
 
-	joinReqs joinReqChan
+	sentGroupMapVer   uint32
+	onGroupMapChanged []onGroupMapChangedFn
+	joinReqs          joinReqChan
+}
+
+// OnGroupMapChanged registers callbacks to be run when the system
+// group map changes.
+func (m *Membership) OnGroupMapChanged(fns ...onGroupMapChangedFn) {
+	m.onGroupMapChanged = append(m.onGroupMapChanged, fns...)
+}
+
+// runGroupMapUpdates compares the current GroupMap version to the
+// last updated version and runs any registered callbacks if the
+// new version is higher.
+//
+// NB: This must be run under a lock!
+func (m *Membership) runGroupMapUpdates(ctx context.Context) error {
+	dbMapVer, err := m.db.CurMapVersion()
+	if err != nil {
+		return err
+	}
+
+	if m.sentGroupMapVer >= dbMapVer {
+		return &ErrGroupMapVerTooOld{dbMapVer, m.sentGroupMapVer}
+	}
+
+	m.log.Debug("invoking onGroupMapChanged callbacks")
+	for _, fn := range m.onGroupMapChanged {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+	}
+
+	m.log.Debugf("system map version: %d", dbMapVer)
+	m.sentGroupMapVer = dbMapVer
+	return nil
+}
+
+// UpdateGroupMap signals the membership to run any callbacks registered
+// to handle group map updates.
+func (m *Membership) UpdateGroupMap(ctx context.Context) error {
+	m.Lock()
+	defer m.Unlock()
+
+	return m.runGroupMapUpdates(ctx)
 }
 
 func (m *Membership) addMember(ctx context.Context, member *Member) error {
@@ -312,7 +357,7 @@ func (m *Membership) addMember(ctx context.Context, member *Member) error {
 	}
 	m.log.Debugf("adding system member: %s", member)
 
-	return m.db.AddMember(ctx, member)
+	return m.db.AddMember(member)
 }
 
 func (m *Membership) updateMember(ctx context.Context, member *Member) error {
@@ -322,7 +367,7 @@ func (m *Membership) updateMember(ctx context.Context, member *Member) error {
 		return err
 	}
 
-	return m.db.UpdateMember(ctx, member)
+	return m.db.UpdateMember(member)
 }
 
 // Add adds member to membership, returns member count.
@@ -353,6 +398,7 @@ type JoinRequest struct {
 	ControlAddr    *net.TCPAddr
 	FabricURI      string
 	FabricContexts uint32
+	isMSRank       bool
 	respCh         joinRespChan
 }
 
@@ -371,25 +417,16 @@ const (
 
 // processJoinReqs is responsible for processing batches of JoinRequests. Each
 // request provides a channel through which the corresponding JoinResponse is sent.
-func (m *Membership) processJoinReqs(ctx context.Context, reqs []*JoinRequest) {
+func (m *Membership) processJoinReqs(parent context.Context, reqs []*JoinRequest) {
 	// Take a lock on the Membership so that we focus on processing
 	// the incoming batch of JoinRequests and nothing else.
 	m.Lock()
 	defer m.Unlock()
 
-	var sendResponse = func(parent context.Context, respCh joinRespChan, resp *JoinResponse) {
-		ctx, cancel := context.WithTimeout(parent, joinRespTimeout)
-		defer cancel()
-
-		select {
-		case <-ctx.Done():
-			m.log.Errorf("failed to send join response: %s", ctx.Err())
-		case respCh <- resp:
-			return
-		}
-	}
-
 	m.log.Debugf("processing %d JoinRequests", len(reqs))
+	resps := make([]*JoinResponse, 0, len(reqs))
+	groupUpdateShouldRun := true
+
 	for _, req := range reqs {
 		resp := new(JoinResponse)
 		curMember, err := m.db.FindMemberByUUID(req.UUID)
@@ -400,18 +437,18 @@ func (m *Membership) processJoinReqs(ctx context.Context, reqs []*JoinRequest) {
 			curMember.FabricURI = req.FabricURI
 			curMember.FabricContexts = req.FabricContexts
 			resp.Member = curMember
-			if err := m.db.UpdateMember(ctx, curMember); err != nil {
-				sendResponse(ctx, req.respCh, &JoinResponse{joinErr: err})
+			if err := m.db.UpdateMember(curMember); err != nil {
+				resps = append(resps, &JoinResponse{joinErr: err})
 				continue
 			}
 
 			resp.MapVersion, err = m.db.CurMapVersion()
 			if err != nil {
-				sendResponse(ctx, req.respCh, &JoinResponse{joinErr: err})
+				resps = append(resps, &JoinResponse{joinErr: err})
 				continue
 			}
 
-			sendResponse(ctx, req.respCh, resp)
+			resps = append(resps, resp)
 			continue
 		}
 
@@ -423,27 +460,51 @@ func (m *Membership) processJoinReqs(ctx context.Context, reqs []*JoinRequest) {
 			FabricContexts: req.FabricContexts,
 			state:          MemberStateJoined,
 		}
-		if err := m.db.AddMember(ctx, newMember); err != nil {
-			sendResponse(ctx, req.respCh, &JoinResponse{joinErr: err})
+		if err := m.db.AddMember(newMember); err != nil {
+			resps = append(resps, &JoinResponse{joinErr: err})
 			continue
 		}
 		resp.Created = true
 		resp.Member = newMember
 		resp.MapVersion, err = m.db.CurMapVersion()
 		if err != nil {
-			sendResponse(ctx, req.respCh, &JoinResponse{joinErr: err})
+			resps = append(resps, &JoinResponse{joinErr: err})
 			continue
 		}
 
-		sendResponse(ctx, req.respCh, resp)
+		if req.isMSRank {
+			groupUpdateShouldRun = false
+		}
+		resps = append(resps, resp)
 	}
+
+	if groupUpdateShouldRun {
+		if err := m.runGroupMapUpdates(parent); err != nil {
+			for i := range resps {
+				resps[i] = &JoinResponse{joinErr: err}
+			}
+		}
+	}
+
+	for i, req := range reqs {
+		ctx, cancel := context.WithTimeout(parent, joinRespTimeout)
+		defer cancel()
+
+		select {
+		case <-ctx.Done():
+			m.log.Errorf("failed to send join response: %s", ctx.Err())
+		case req.respCh <- resps[i]:
+		}
+	}
+	m.log.Debugf("sent %d JoinResponses", len(resps))
 }
 
 // joinLoop runs until the supplied context is canceled, and is
 // responsible for receiving and processing incoming JoinRequests
 // in batches.
-func (m *Membership) joinLoop(ctx context.Context) {
+func (m *Membership) joinLoop(ctx context.Context, repAddr *net.TCPAddr) {
 	var joinReqs []*JoinRequest
+	localRanksJoined := false
 
 	for {
 		select {
@@ -455,9 +516,28 @@ func (m *Membership) joinLoop(ctx context.Context) {
 			if len(joinReqs) == 0 {
 				continue
 			}
-			toProcess := make([]*JoinRequest, len(joinReqs))
-			copy(toProcess, joinReqs)
-			joinReqs = nil
+
+			var toProcess []*JoinRequest
+			if localRanksJoined {
+				toProcess = make([]*JoinRequest, len(joinReqs))
+				copy(toProcess, joinReqs)
+				joinReqs = nil
+			} else {
+				// This bit of hackery is needed to preferentially
+				// process local ranks first, in order to get them
+				// set up before processing the rest.
+				var req *JoinRequest
+				for i := len(joinReqs) - 1; i > 0; i-- {
+					req = joinReqs[i]
+					if !common.CmpTcpAddr(req.ControlAddr, repAddr) {
+						continue
+					}
+					req.isMSRank = true
+					toProcess = append(toProcess, req)
+					joinReqs = append(joinReqs[:i], joinReqs[i+1:]...)
+				}
+				localRanksJoined = true
+			}
 			go m.processJoinReqs(ctx, toProcess)
 		}
 	}
@@ -465,8 +545,8 @@ func (m *Membership) joinLoop(ctx context.Context) {
 
 // StartJoinLoop starts the loop responsible for receiving and
 // processing JoinRequests in a new goroutine.
-func (m *Membership) StartJoinLoop(ctx context.Context) {
-	go m.joinLoop(ctx)
+func (m *Membership) StartJoinLoop(ctx context.Context, repAddr *net.TCPAddr) {
+	go m.joinLoop(ctx, repAddr)
 }
 
 // Join accepts a JoinRequest containing the new or re-joining member's details.
@@ -474,7 +554,6 @@ func (m *Membership) StartJoinLoop(ctx context.Context) {
 // presents a synchronous interface.
 func (m *Membership) Join(ctx context.Context, req *JoinRequest) (*JoinResponse, error) {
 	req.respCh = make(joinRespChan)
-
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -517,7 +596,7 @@ func (m *Membership) Remove(ctx context.Context, rank Rank) {
 		m.log.Errorf("remove %d failed: %s", rank, err)
 		return
 	}
-	if err := m.db.RemoveMember(ctx, member); err != nil {
+	if err := m.db.RemoveMember(member); err != nil {
 		m.log.Errorf("remove %d failed: %s", rank, err)
 	}
 }
@@ -664,7 +743,7 @@ func (m *Membership) UpdateMemberStates(ctx context.Context, results MemberResul
 		member.state = result.State
 		member.Info = result.Msg
 
-		if err := m.db.UpdateMember(ctx, member); err != nil {
+		if err := m.db.UpdateMember(member); err != nil {
 			return err
 		}
 	}

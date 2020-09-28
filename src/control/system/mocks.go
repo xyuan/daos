@@ -64,7 +64,7 @@ func MockMembership(t *testing.T, log logging.Logger) *Membership {
 
 func MockDatabase(t *testing.T, log logging.Logger) *Database {
 	db := NewDatabase(log, nil)
-	db.isReplica = true
+	db.replicaAddr = &net.TCPAddr{}
 	addr, it := raft.NewInmemTransport(raft.NewInmemAddr())
 	rCfg := raft.DefaultConfig()
 	rCfg.LocalID = raft.ServerID(addr)

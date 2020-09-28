@@ -116,3 +116,17 @@ func (err *ErrPoolNotFound) Error() string {
 		return "unable to find pool service"
 	}
 }
+
+type ErrGroupMapVerTooOld struct {
+	requested uint32
+	current   uint32
+}
+
+func (err *ErrGroupMapVerTooOld) Error() string {
+	return fmt.Sprintf("map version %d <= %d", err.requested, err.current)
+}
+
+func IsErrGroupMapVerTooOld(err error) bool {
+	_, ok := err.(*ErrGroupMapVerTooOld)
+	return ok
+}

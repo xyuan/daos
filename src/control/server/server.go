@@ -276,16 +276,13 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 					return nil
 				}
 
-				err := mgmtSvc.doGroupUpdate(ctx)
-				switch err {
-				// An empty GroupMap is not an error at this point
-				// because we may still be in wire-up rather than restarting
-				// an existing cluster.
-				case nil, system.ErrEmptyGroupMap:
-					return nil
-				default:
-					return mgmtSvc.sysdb.ResignLeadership(err)
-				}
+				return nil
+				/*
+					err := membership.UpdateGroupMap(ctx)
+					if err == nil || system.IsErrGroupMapVerTooOld(err) {
+						return nil
+					}
+					return err*/
 			})
 		}
 	}
@@ -355,14 +352,18 @@ func Start(log *logging.LeveledLogger, cfg *Configuration) error {
 	mgmtpb.RegisterMgmtSvcServer(grpcServer, mgmtSvc)
 	sysdb.OnLeadershipGained(func(ctx context.Context) error {
 		log.Infof("MS leader running on %s", hostname())
-		membership.StartJoinLoop(ctx)
+		repAddr, err := sysdb.ReplicaAddr()
+		if err != nil {
+			return err
+		}
+		membership.StartJoinLoop(ctx, repAddr)
 		return nil
 	})
 	sysdb.OnLeadershipLost(func() error {
 		log.Infof("MS leader no longer running on %s", hostname())
 		return nil
 	})
-	sysdb.OnGroupMapChanged(func(ctx context.Context) error {
+	membership.OnGroupMapChanged(func(ctx context.Context) error {
 		err := mgmtSvc.doGroupUpdate(ctx)
 		switch err {
 		case nil, instanceNotReady: // try again later

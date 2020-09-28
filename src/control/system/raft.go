@@ -24,7 +24,6 @@
 package system
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"time"
@@ -81,30 +80,12 @@ func (db *Database) ResignLeadership(cause error) error {
 	return cause
 }
 
-func (db *Database) submitMemberUpdate(ctx context.Context, op raftOp, m *memberUpdate) error {
+func (db *Database) submitMemberUpdate(op raftOp, m *memberUpdate) error {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	if err := db.submitRaftUpdate(op, data); err != nil {
-		return err
-	}
-
-	// If the group map has changed (determined based on the following
-	// criteria), then we need to fire off the callbacks associated with
-	// this event.
-	groupMapChanged := m.NextRank
-	if !groupMapChanged {
-		return nil
-	}
-
-	for _, fn := range db.onGroupMapChanged {
-		if err := fn(ctx); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return db.submitRaftUpdate(op, data)
 }
 
 func (db *Database) submitPoolUpdate(op raftOp, ps *PoolService) error {
