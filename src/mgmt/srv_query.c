@@ -36,7 +36,6 @@ bs_state_query(void *arg)
 {
 	struct dss_module_info	*info = dss_get_module_info();
 	struct bio_xs_context	*bxc;
-	int			 rc;
 	int			*bs_state = arg;
 
 	D_ASSERT(info != NULL);
@@ -50,11 +49,7 @@ bs_state_query(void *arg)
 		return;
 	}
 
-	rc = bio_get_bs_state(bs_state, bxc);
-	if (rc != 0) {
-		D_ERROR("Error getting BIO blobstore state\n");
-		return;
-	}
+	bio_get_bs_state(bs_state, bxc);
 }
 
 /*

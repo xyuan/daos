@@ -605,7 +605,7 @@ int bio_get_dev_state(struct nvme_health_stats *dev_state,
  *
  * \return			Zero on success, negative value on error
  */
-int bio_get_bs_state(int *blobstore_state, struct bio_xs_context *xs);
+void bio_get_bs_state(int *blobstore_state, struct bio_xs_context *xs);
 
 
 /*

@@ -273,7 +273,6 @@ nvme_test_get_blobstore_state(void **state)
 	int		 blobstore_state;
 	int		 i, j;
 	int		 ndisks;
-	int		 retry_cnt;
 	int		 rc;
 
 	if (!is_nvme_enabled(arg)) {
@@ -351,18 +350,10 @@ nvme_test_get_blobstore_state(void **state)
 	 *  Continue to check blobstore state until "OUT" state is returned
 	 *  or max test retry count is hit (5 min).
 	 */
-	retry_cnt = 0;
-	while (retry_cnt <= 15) {
-		rc = daos_mgmt_get_bs_state(arg->group, devices[0].device_id,
-					    &blobstore_state, NULL /*ev*/);
-		assert_int_equal(rc, 0);
-
-		if (verify_blobstore_state(blobstore_state, "out") == 0)
-			break;
-
-		sleep(20);
-		retry_cnt++;
-	};
+	rc = wait_and_verify_blobstore_state(devices[0].device_id,
+					     /*expected state*/"out",
+					     arg->group);
+	assert_int_equal(rc, 0);
 
 	print_message("Blobstore is in OUT state\n");
 	D_FREE(devices);

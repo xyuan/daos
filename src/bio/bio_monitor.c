@@ -41,16 +41,6 @@ struct dev_state_msg_arg {
 	ABT_eventual			 eventual;
 };
 
-/*
- * Used for getting bio blobstore state, which requires exclusive access from
- * the device owner xstream.
- */
-struct bs_state_msg_arg {
-	struct bio_xs_context		*xs;
-	int				 bsstate;
-	ABT_eventual			 eventual;
-};
-
 /* Copy out the nvme_health_stats in the device owner xstream context */
 static void
 bio_get_dev_state_internal(void *msg_arg)
@@ -61,18 +51,6 @@ bio_get_dev_state_internal(void *msg_arg)
 
 	dsm->devstate = dsm->xs->bxc_blobstore->bb_dev_health.bdh_health_state;
 	ABT_eventual_set(dsm->eventual, NULL, 0);
-}
-
-/* Copy out the internal blobstore device state in the device owner xstream context */
-static void
-bio_get_bs_state_internal(void *msg_arg)
-{
-	struct bs_state_msg_arg		*bsm = msg_arg;
-
-	D_ASSERT(bsm != NULL);
-
-	bsm->bsstate = bsm->xs->bxc_blobstore->bb_state;
-	ABT_eventual_set(bsm->eventual, NULL, 0);
 }
 
 static void
@@ -139,34 +117,12 @@ bio_get_dev_state(struct nvme_health_stats *state, struct bio_xs_context *xs)
 }
 
 /*
- * Call internal method to get the BIO blobstore device state from the device owner
- * xstream.
+ * Copy out the internal BIO blobstore device state.
  */
-int
+void
 bio_get_bs_state(int *bs_state, struct bio_xs_context *xs)
 {
-	struct bs_state_msg_arg		bsm = { 0 };
-	int				rc;
-
-	rc = ABT_eventual_create(0, &bsm.eventual);
-	if (rc != ABT_SUCCESS)
-		return dss_abterr2der(rc);
-
-	bsm.xs = xs;
-
-	spdk_thread_send_msg(owner_thread(xs->bxc_blobstore),
-			     bio_get_bs_state_internal, &bsm);
-	rc = ABT_eventual_wait(bsm.eventual, NULL);
-	if (rc != ABT_SUCCESS)
-		return dss_abterr2der(rc);
-
-	*bs_state = bsm.bsstate;
-
-	rc = ABT_eventual_free(&bsm.eventual);
-	if (rc != ABT_SUCCESS)
-		rc = dss_abterr2der(rc);
-
-	return rc;
+	*bs_state = xs->bxc_blobstore->bb_state;
 }
 
 /*
