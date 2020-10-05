@@ -44,29 +44,36 @@ dependencies automatically.
 
 ## Distribution Packages
 
-DAOS RPM packaging is currently available, and DEB packaging is under development and will be available in a future DAOS release. Integration with the [Spack](https://spack.io/) package manager is also
-under consideration.
+DAOS RPM packaging is currently available, and DEB packaging is under
+development and will be available in a future DAOS release.
+Integration with the [Spack](https://spack.io/) package manager is also under
+consideration.
 
 ### Installing DAOS from RPMs
 
 DAOS RPMs are available from the Intel&copy; Registration Center.
-Clicking the [Intel&copy; Registration Center](https://registrationcenter.intel.com/forms/?productid=3412) link will take you to the registration center, where you will create an account. After creating an account, the following files can be downloaded:
+Clicking the [Intel&copy; Registration Center](https://registrationcenter.intel.com/forms/?productid=3412)
+link will take you to the registration center, where you will create an account.
+After creating an account, the following files can be downloaded:
 
 - daos_debug.tar - _debuginfo_ packages
 - daos_packages.tar - client and server main packages
 - daos_source.tar - source RPMs
 
-**Recommended steps after download:**
+Recommended steps after download:
 
-	sudo tar -C / -xf daos_packages.tar
-	sudo cp /opt/intel/daos_rpms/packages/daos_packages.repo /etc/yum.repos.d
-	rm /opt/intel/daos_rpms/packages/libabt*
-	(cd /opt/intel/daos_rpms/packages/ && createrepo .)
-	sudo yum install epel-release
-	sudo yum install daos-server
-	sudo yum install daos-client
+```
+$ sudo tar -C / -xf daos_packages.tar
+$ sudo cp /opt/intel/daos_rpms/packages/daos_packages.repo /etc/yum.repos.d
+$ rm /opt/intel/daos_rpms/packages/libabt*
+$ (cd /opt/intel/daos_rpms/packages/ && createrepo .)
+$ sudo yum install epel-release
+$ sudo yum install daos-server
+$ sudo yum install daos-client
+```
 
-**Note:** *Only daos-client OR daos-server needs to be specified on the yum command line.*
+!!! note:
+    Only daos-client OR daos-server needs to be specified on the yum command line.
 
 
 ## DAOS from Scratch
@@ -176,14 +183,17 @@ On Mac, please make sure that the Docker settings under
 To build the Docker image directly from GitHub, run the following command:
 
 ```bash
-$ curl -L https://raw.githubusercontent.com/daos-stack/daos/master/utils/docker/Dockerfile.centos.7 | \
-        docker build --no-cache -t daos -
+$ docker build -t daos -f Dockerfile.centos.7 github.com/daos-stack/daos#:utils/docker
 ```
 
 This creates a CentOS 7 image, fetches the latest DAOS version from GitHub,
 builds it, and installs it in the image.
 For Ubuntu and other Linux distributions, replace Dockerfile.centos.7 with
 Dockerfile.ubuntu.20.04 and the appropriate version of interest.
+
+!!! note
+    scon options can be passed via the docker build command line via --build-arg SCONS_OPTIONS=
+    e.g. --build-arg SCONS_OPTIONS='-j 4' to run up to 4 build jobs in parallel
 
 Once the image created, one can start a container that will eventually run
 the DAOS service:
@@ -196,6 +206,7 @@ $ docker run -it -d --privileged --name server \
 
 If Docker is being run on a non-Linux system (e.g., OSX), the export of /dev/hugepages
 should be removed since it is not supported.
+
 
 ### Building from a Local Tree
 
