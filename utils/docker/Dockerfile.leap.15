@@ -148,21 +148,20 @@ WORKDIR /home/$USER
 # set NOBUILD to disable git clone & build
 ARG NOBUILD
 
-# Fetch DAOS code
-RUN if [ "x$NOBUILD" = "x" ] ; then \
-  git clone https://github.com/daos-stack/daos.git; fi
-WORKDIR /home/$USER/daos
-
-# Build DAOS & dependencies
+# Fetch & build DAOS & dependencies
 ARG SCONS_OPTIONS
-RUN if [ "x$NOBUILD" = "x" ] ; then \
-  git submodule init && git submodule update; fi
-RUN if [ "x$NOBUILD" = "x" ] ; then \
-  scons --build-deps=yes $SCONS_OPTIONS install PREFIX=/usr/local; fi
+RUN if [ "x$NOBUILD" = "x" ] ; then					\
+      git clone https://github.com/daos-stack/daos.git;			\
+      cd daos;								\
+      git submodule init;						\
+      git submodule update;						\
+      scons --build-deps=yes $SCONS_OPTIONS install PREFIX=/usr/local;	\
+      cd src/client/java;						\
+      mvn clean install -DskipITs -Ddaos.install.path=/usr/local;	\
+    fi
 
 # Create agent & server runtime directories
-RUN mkdir -p /var/run/daos_server
-RUN mkdir -p /var/run/daos_agent
+RUN mkdir -p /var/run/daos_server /var/run/daos_agent
 
 # Set environment variables
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH

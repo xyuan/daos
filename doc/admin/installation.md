@@ -248,7 +248,6 @@ uses 4GB of DRAM to emulate persistent memory and 16GB of bulk storage under
 The DAOS service can be started in the docker container as follows:
 
 ```bash
-$ docker exec server mkdir /var/run/daos_server
 $ docker exec server daos_server start \
         -o /home/daos/daos/utils/config/examples/daos_server_local.yml
 ```
