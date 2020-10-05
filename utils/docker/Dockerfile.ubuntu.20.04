@@ -88,6 +88,8 @@ RUN if [ "x$NOBUILD" = "x" ] ; then					\
       scons --build-deps=yes $SCONS_OPTIONS install PREFIX=/usr/local;	\
       cd src/client/java;						\
       mvn clean install -DskipITs -Ddaos.install.path=/usr/local;	\
+      cd ..;								\
+      rm -rf /home/daos/daos;						\
     fi
 
 # Create agent & server runtime directories
