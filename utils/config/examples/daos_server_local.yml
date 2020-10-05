@@ -4,7 +4,7 @@ name: daos_server
 access_points: ['localhost']
 # port: 10001
 provider: ofi+sockets
-nr_hugepages: 4096
+nr_hugepages: 128
 control_log_file: /tmp/daos_control.log
 transport_config:
    allow_insecure: true

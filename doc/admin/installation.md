@@ -252,6 +252,12 @@ $ docker exec server daos_server start \
         -o /home/daos/daos/utils/config/examples/daos_server_local.yml
 ```
 
+!!! note
+    On Linux, please make sure that the uio_pci_generic module is loaded.
+    Please also make sure that enough huge pages have been allocated by running
+    `sudo sysctl vm.nr_hugepages`. If the number is below 128, please
+    allocate extra pages by running `sudo sysctl -w vm.nr_hugepages=128`.
+
 Once started, the DAOS server waits for the administrator to format the system.
 This can be triggered in a different shell, using the following command:
 
@@ -261,9 +267,6 @@ $ docker exec server dmg -i storage format
 
 Upon successful completion of the format, the storage engine is started, and pools
 can be created using the daos admin tool (see next section).
-
-!!! note
-    Please make sure that the uio_pci_generic module is loaded.
 
 For more advanced configurations involving SCM, SSD or a real fabric, please
 refer to the next section.
