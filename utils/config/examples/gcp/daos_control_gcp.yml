@@ -1,0 +1,3 @@
+hostlist: ['daos-server-03f8,daos-server-fjv7,daos-server-gcc3,daos-server-qgtz']
+transport_config:
+ allow_insecure: true

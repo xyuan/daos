@@ -90,6 +90,10 @@ RUN if [ "x$NOBUILD" = "x" ] ; then \
 RUN if [ "x$NOBUILD" = "x" ] ; then \
   scons --build-deps=yes $SCONS_OPTIONS install PREFIX=/usr/local; fi
 
+# Create agent & server runtime directories
+RUN mkdir -p /var/run/daos_server
+RUN mkdir -p /var/run/daos_agent
+
 # Set environment variables
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:/usr/local/sbin:$PATH
