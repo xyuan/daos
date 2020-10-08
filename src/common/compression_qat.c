@@ -28,87 +28,44 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include <lz4.h>
-#include <isa-l.h>
 #include <gurt/types.h>
 #include <daos/common.h>
 #include <daos/compression.h>
 
+#ifdef HAVE_QAT
+#include <qat.h>
 /**
  * ---------------------------------------------------------------------------
  * Algorithms
  * ---------------------------------------------------------------------------
  */
 
-/** LZ4 */
-static int
-lz4_init(void **daos_dc_ctx,
-	 uint16_t level,
-	 uint32_t max_buf_size)
-{
-	return 0;
-}
-
-static int
-lz4_compress(void *daos_dc_ctx,
-	     uint8_t *src, size_t src_len,
-	     uint8_t *dst, size_t dst_len)
-{
-	return LZ4_compress_default((const char *)src, (char *)dst,
-				    (int)src_len, (int)dst_len);
-}
-
-static int
-lz4_decompress(void *daos_dc_ctx,
-	       uint8_t *src, size_t src_len,
-	       uint8_t *dst, size_t dst_len)
-{
-	int ret = LZ4_decompress_safe((const char *)src, (char *)dst,
-				      (int)src_len, (int)dst_len);
-
-	if (ret <= 0)
-		return 0;
-
-	return ret;
-}
-
-void
-lz4_destroy(void *daos_dc_ctx)
-{
-	return;
-}
-
-struct compress_ft lz4_algo = {
-	.cf_init = lz4_init,
-	.cf_compress = lz4_compress,
-	.cf_decompress = lz4_decompress,
-	.cf_destroy = lz4_destroy,
-	.cf_level = 1,
-	.cf_name = "lz4",
-	.cf_type = COMPRESS_TYPE_LZ4
-};
-
 /** Deflate */
 struct deflate_ctx {
-	struct isal_zstream stream;
-	struct inflate_state state;
+	CpaInstanceHandle	dc_inst_hdl;
+	CpaDcSessionHandle	session_hdl;
+
+	CpaBufferList		**inter_bufs;
+	Cpa16U			num_inter_bufs;
 };
 
 static int
-deflate_init(void **daos_dc_ctx,
-	     uint16_t level,
+deflate_init(void **daos_dc_ctx, uint16_t level,
 	     uint32_t max_buf_size)
 {
-	int level_size_buf[] = {
-		ISAL_DEF_LVL0_DEFAULT,
-		ISAL_DEF_LVL1_DEFAULT,
-		ISAL_DEF_LVL2_DEFAULT,
-		ISAL_DEF_LVL3_DEFAULT,
-	};
-	uint16_t isal_level = level - 1;
+	int rc;
 
-	if (isal_level >= sizeof(level_size_buf) / sizeof(int)) {
-		D_ERROR("Invalid isa-l compression level: %d\n", level);
+	CpaDcCompLvl qat_dc_level[] = {
+		CPA_DC_L1,
+		CPA_DC_L2,
+		CPA_DC_L3,
+		CPA_DC_L4,
+	};
+
+	uint16_t dc_level_index = level - 1;
+
+	if (dc_level_index >= ARRAY_SIZE(qat_dc_level)) {
+		D_ERROR("Invalid qat compression level: %d\n", level);
 		return -1;
 	}
 
@@ -118,88 +75,63 @@ deflate_init(void **daos_dc_ctx,
 	if (ctx == NULL)
 		return -DER_NOMEM;
 
-	isal_deflate_stateless_init(&ctx->stream);
-	ctx->stream.level = isal_level;
-	ctx->stream.level_buf = malloc(level_size_buf[isal_level]);
-	ctx->stream.level_buf_size = level_size_buf[isal_level];
-	ctx->stream.flush = FULL_FLUSH;
-	ctx->stream.end_of_stream = 1;
-
-	isal_deflate_set_hufftables(&ctx->stream, NULL, IGZIP_HUFFTABLE_STATIC);
-
-	isal_inflate_init(&ctx->state);
+	rc = qat_dc_init(
+		&ctx->dc_inst_hdl, &ctx->session_hdl,
+		&ctx->num_inter_bufs, &ctx->inter_bufs,
+		max_buf_size,
+		qat_dc_level[dc_level_index]);
 
 	*daos_dc_ctx = ctx;
-
-	return 0;
+	return rc;
 }
 
 static int
 deflate_compress(void *daos_dc_ctx, uint8_t *src, size_t src_len,
 		 uint8_t *dst, size_t dst_len)
 {
-	int ret = 0;
 	struct deflate_ctx *ctx = daos_dc_ctx;
 
-	ctx->stream.total_in = 0;
-	ctx->stream.total_out = 0;
-	ctx->stream.avail_in = src_len;
-	ctx->stream.next_in = src;
-	ctx->stream.avail_out = dst_len;
-	ctx->stream.next_out = dst;
-
-	ret = isal_deflate_stateless(&ctx->stream);
-
-	/* Check if input buffer are all consumed */
-	if (ctx->stream.avail_in)
-		return 0;
-
-	if (ret != COMP_OK)
-		return 0;
-
-	return ctx->stream.total_out;
+	return qat_dc_compress(
+		&ctx->dc_inst_hdl,
+		&ctx->session_hdl,
+		src, src_len,
+		dst, dst_len, DIR_COMPRESS);
 }
 
 static int
 deflate_decompress(void *daos_dc_ctx, uint8_t *src, size_t src_len,
 		   uint8_t *dst, size_t dst_len)
 {
-	int ret = 0;
 	struct deflate_ctx *ctx = daos_dc_ctx;
 
-	ctx->stream.total_in = 0;
-	ctx->stream.total_out = 0;
-	ctx->state.next_in = src;
-	ctx->state.avail_in = src_len;
-	ctx->state.next_out = dst;
-	ctx->state.avail_out = dst_len;
-
-	ret = isal_inflate(&ctx->state);
-
-	/* Check if input buffer are all consumed */
-	if (ctx->state.avail_in)
-		return -1;
-
-	if (ret != ISAL_DECOMP_OK)
-		return ret;
-
-	return ctx->state.total_out;
+	return qat_dc_compress(
+		&ctx->dc_inst_hdl,
+		&ctx->session_hdl,
+		src, src_len,
+		dst, dst_len, DIR_DECOMPRESS);
 }
 
 static void
 deflate_destroy(void *daos_dc_ctx)
 {
+	struct deflate_ctx *ctx = daos_dc_ctx;
+
+	qat_dc_destroy(
+		&ctx->dc_inst_hdl,
+		&ctx->session_hdl,
+		ctx->inter_bufs,
+		ctx->num_inter_bufs);
+
 	D_FREE(daos_dc_ctx);
 }
 
 static int
 is_available()
 {
-	/** ISA-L is always available */
-	return 1;
+	return qat_dc_is_available();
 }
 
-struct compress_ft deflate_algo = {
+struct compress_ft qat_deflate_algo = {
 	.cf_init = deflate_init,
 	.cf_compress = deflate_compress,
 	.cf_decompress = deflate_decompress,
@@ -210,7 +142,7 @@ struct compress_ft deflate_algo = {
 	.cf_type = COMPRESS_TYPE_DEFLATE
 };
 
-struct compress_ft deflate1_algo = {
+struct compress_ft qat_deflate1_algo = {
 	.cf_init = deflate_init,
 	.cf_compress = deflate_compress,
 	.cf_decompress = deflate_decompress,
@@ -221,7 +153,7 @@ struct compress_ft deflate1_algo = {
 	.cf_type = COMPRESS_TYPE_DEFLATE1
 };
 
-struct compress_ft deflate2_algo = {
+struct compress_ft qat_deflate2_algo = {
 	.cf_init = deflate_init,
 	.cf_compress = deflate_compress,
 	.cf_decompress = deflate_decompress,
@@ -232,7 +164,7 @@ struct compress_ft deflate2_algo = {
 	.cf_type = COMPRESS_TYPE_DEFLATE2
 };
 
-struct compress_ft deflate3_algo = {
+struct compress_ft qat_deflate3_algo = {
 	.cf_init = deflate_init,
 	.cf_compress = deflate_compress,
 	.cf_decompress = deflate_decompress,
@@ -243,7 +175,7 @@ struct compress_ft deflate3_algo = {
 	.cf_type = COMPRESS_TYPE_DEFLATE3
 };
 
-struct compress_ft deflate4_algo = {
+struct compress_ft qat_deflate4_algo = {
 	.cf_init = deflate_init,
 	.cf_compress = deflate_compress,
 	.cf_decompress = deflate_decompress,
@@ -255,11 +187,23 @@ struct compress_ft deflate4_algo = {
 };
 
 /** Index to algo table should align with enum DAOS_COMPRESS_TYPE - 1 */
-struct compress_ft *isal_compress_algo_table[] = {
-	&lz4_algo,
-	&deflate_algo,
-	&deflate1_algo,
-	&deflate2_algo,
-	&deflate3_algo,
-	&deflate4_algo,
+struct compress_ft *qat_compress_algo_table[] = {
+	NULL, /** LZ4 is not supported by QAT for now */
+	&qat_deflate_algo,
+	&qat_deflate1_algo,
+	&qat_deflate2_algo,
+	&qat_deflate3_algo,
+	&qat_deflate4_algo,
 };
+
+#else
+struct compress_ft *qat_compress_algo_table[] = {
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+};
+
+#endif

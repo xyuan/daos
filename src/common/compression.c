@@ -33,9 +33,6 @@
 #include <daos/compression.h>
 #include <daos/cont_props.h>
 
-/** ISA-L compression function table implemented in compression_isal.c */
-extern struct compress_ft *isal_compress_algo_table[];
-
 /** Container Property knowledge */
 enum DAOS_COMPRESS_TYPE
 daos_contprop2compresstype(int contprop_compress_val)
@@ -82,18 +79,23 @@ daos_compresstype2contprop(enum DAOS_COMPRESS_TYPE daos_compress_type)
 /** ------------------------------------------------------------- */
 
 /**
- * Use ISA-L table by default, this needs to be modified in the future for QAT
- * and other accelerator support.
+ * Use ISA-L table by default, and choose QAT if it is preferred & available.
  */
-static struct compress_ft **algo_table = isal_compress_algo_table;
+static struct compress_ft **isal_algo_table = isal_compress_algo_table;
+static struct compress_ft **qat_algo_table = qat_compress_algo_table;
 
 struct compress_ft *
-daos_compress_type2algo(enum DAOS_COMPRESS_TYPE type)
+daos_compress_type2algo(enum DAOS_COMPRESS_TYPE type, bool qat_preferred)
 {
 	struct compress_ft *result = NULL;
 
 	if (type > COMPRESS_TYPE_UNKNOWN && type < COMPRESS_TYPE_END) {
-		result = algo_table[type - 1];
+		if (qat_preferred &&
+		    qat_algo_table[type - 1] &&
+		    qat_algo_table[type - 1]->cf_available())
+			result = qat_algo_table[type - 1];
+		else
+			result = isal_algo_table[type - 1];
 	}
 	if (result && result->cf_type == COMPRESS_TYPE_UNKNOWN)
 		result->cf_type = type;
@@ -106,7 +108,7 @@ daos_str2compresscontprop(const char *value)
 	int t;
 
 	for (t = COMPRESS_TYPE_UNKNOWN + 1; t < COMPRESS_TYPE_END; t++) {
-		char *name = algo_table[t - 1]->cf_name;
+		char *name = isal_algo_table[t - 1]->cf_name;
 
 		if (!strncmp(name, value,
 			     min(strlen(name), strlen(value)) + 1)) {
@@ -125,10 +127,12 @@ daos_str2compresscontprop(const char *value)
  */
 
 int
-daos_compressor_init(struct daos_compressor **obj, struct compress_ft *ft)
+daos_compressor_init(struct daos_compressor **obj,
+		     struct compress_ft *ft,
+		     uint32_t max_buf_size)
 {
-	struct daos_compressor *result;
-	int rc = 0;
+	struct daos_compressor	*result;
+	int			rc = 0;
 
 	if (!ft) {
 		D_ERROR("No function table");
@@ -142,7 +146,9 @@ daos_compressor_init(struct daos_compressor **obj, struct compress_ft *ft)
 	result->dc_algo = ft;
 
 	if (result->dc_algo->cf_init)
-		rc = result->dc_algo->cf_init(&result->dc_ctx, ft->cf_level);
+		rc = result->dc_algo->cf_init(&result->dc_ctx,
+					      ft->cf_level,
+					      max_buf_size);
 
 	if (rc == 0)
 		*obj = result;
@@ -152,9 +158,14 @@ daos_compressor_init(struct daos_compressor **obj, struct compress_ft *ft)
 
 int
 daos_compressor_init_with_type(struct daos_compressor **obj,
-			       enum DAOS_COMPRESS_TYPE type)
+			       enum DAOS_COMPRESS_TYPE type,
+			       bool qat_preferred,
+			       uint32_t max_buf_size)
 {
-	return daos_compressor_init(obj, daos_compress_type2algo(type));
+	return daos_compressor_init(
+			obj,
+			daos_compress_type2algo(type, qat_preferred),
+			max_buf_size);
 }
 
 int
@@ -163,8 +174,10 @@ daos_compressor_compress(struct daos_compressor *obj,
 			 uint8_t *dst_buf, size_t dst_len)
 {
 	if (obj->dc_algo->cf_compress)
-		return obj->dc_algo->cf_compress(obj->dc_ctx,
-			src_buf, src_len, dst_buf, dst_len);
+		return obj->dc_algo->cf_compress(
+			obj->dc_ctx,
+			src_buf, src_len,
+			dst_buf, dst_len);
 
 	return 0;
 }
@@ -175,8 +188,10 @@ daos_compressor_decompress(struct daos_compressor *obj,
 			   uint8_t *dst_buf, size_t dst_len)
 {
 	if (obj->dc_algo->cf_decompress)
-		return obj->dc_algo->cf_decompress(obj->dc_ctx,
-			src_buf, src_len, dst_buf, dst_len);
+		return obj->dc_algo->cf_decompress(
+			obj->dc_ctx,
+			src_buf, src_len,
+			dst_buf, dst_len);
 
 	return 0;
 }

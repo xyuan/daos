@@ -71,41 +71,53 @@ struct daos_compressor {
 };
 
 struct compress_ft {
-	int		(*cf_init)(void **daos_dc_ctx, uint16_t level);
+	int		(*cf_init)(void **daos_dc_ctx,
+				   uint16_t level, uint32_t max_buf_size);
 	int		(*cf_compress)(void *daos_dc_ctx,
 				       uint8_t *src, size_t src_len,
 				       uint8_t *dst, size_t dst_len);
 	int		(*cf_decompress)(void *daos_mhash_ctx,
 					 uint8_t *src, size_t src_len,
 					 uint8_t *dst, size_t dst_len);
-	void	(*cf_destroy)(void *daos_dc_ctx);
+	void		(*cf_destroy)(void *daos_dc_ctx);
+	int		(*cf_available)();
 	uint16_t	cf_level;
 	char		*cf_name;
 	enum DAOS_COMPRESS_TYPE	cf_type;
 };
 
 struct compress_ft *
-daos_compress_type2algo(enum DAOS_COMPRESS_TYPE type);
+daos_compress_type2algo(enum DAOS_COMPRESS_TYPE type, bool qat_preferred);
 
 /**
  * Initialize compressor with the specified compress function table.
  *
- * \param[in]	obj	compressor.
- * \param[in]	ft	function table.
+ * \param[in]	obj		compressor.
+ * \param[in]	ft		function table.
+ * \param[in]	max_buf_size	maximum input size in bytes for each call,
+ *		it is used by qat only for intermediate buffer allocation,
+ *		in qat, if the size is set to 0, 64KB is used by default.
  */
 int
 daos_compressor_init(struct daos_compressor **obj,
-		     struct compress_ft *ft);
+		     struct compress_ft *ft,
+		     uint32_t max_buf_size);
 
 /**
  * Initialize compressor with the specified compress type.
  *
- * \param[in]	obj	compressor.
- * \param[in]	type	compression type (algorithm).
+ * \param[in]	obj		compressor.
+ * \param[in]	type		compression type (algorithm).
+ * \param[in]	qat_preferred	indicates if qat is preferred.
+ * \param[in]	max_buf_size	maximum input size in bytes for each call,
+ *		it is used by qat only for intermediate buffer allocation,
+ *		in qat, if the size is set to 0, 64KB is used by default.
  */
 int
 daos_compressor_init_with_type(struct daos_compressor **obj,
-			       enum DAOS_COMPRESS_TYPE type);
+			       enum DAOS_COMPRESS_TYPE type,
+			       bool qat_preferred,
+			       uint32_t max_buf_size);
 
 /**
  * Compression function.
@@ -150,5 +162,11 @@ daos_compressor_decompress(struct daos_compressor *obj,
  */
 void
 daos_compressor_destroy(struct daos_compressor **obj);
+
+/** ISA-L compression function table implemented in compression_isal.c */
+extern struct compress_ft *isal_compress_algo_table[];
+
+/** QAT compression function table implemented in compression_qat.c */
+extern struct compress_ft *qat_compress_algo_table[];
 
 #endif /** __DAOS_COMPRESSION_H */
