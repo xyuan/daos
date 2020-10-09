@@ -131,6 +131,7 @@ const (
 	ServerInstancesNotStopped
 	ServerConfigInvalidNetDevClass
 	ServerVfioDisabled
+	ServerConfigFaultDomainInvalid
 
 	// spdk library bindings codes
 	SpdkUnknown Code = iota + 700
