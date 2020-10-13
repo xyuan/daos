@@ -249,13 +249,6 @@ update_one_tgt(struct pool_map *map, struct pool_target *target,
 			D_PRINT("Target (rank %u idx %u) is down.\n",
 				target->ta_comp.co_rank,
 				target->ta_comp.co_index);
-			if (evict_rank && pool_map_node_status_match(dom,
-				PO_COMP_ST_DOWN | PO_COMP_ST_DOWNOUT)) {
-				D_DEBUG(DF_DSMS, "change rank %u to DOWN\n",
-					dom->do_comp.co_rank);
-				dom->do_comp.co_status = PO_COMP_ST_DOWN;
-				dom->do_comp.co_fseq = target->ta_comp.co_fseq;
-			}
 			break;
 		case PO_COMP_ST_NEW:
 			/*
@@ -452,8 +445,19 @@ ds_pool_map_tgts_update(struct pool_map *map, struct pool_target_id_list *tgts,
 				    &version);
 		if (rc != 0)
 			return rc;
-	}
 
+		if (evict_rank &&
+		    !(dom->do_comp.co_status & (PO_COMP_ST_DOWN |
+						PO_COMP_ST_DOWNOUT)) &&
+		    pool_map_node_status_match(dom,
+					PO_COMP_ST_DOWN | PO_COMP_ST_DOWNOUT)) {
+			dom->do_comp.co_status = PO_COMP_ST_DOWN;
+			dom->do_comp.co_fseq = target->ta_comp.co_fseq;
+			D_DEBUG(DF_DSMS, "change rank %u to DOWN\n",
+				dom->do_comp.co_rank);
+			version++;
+		}
+	}
 	/* Set the version only if actual changes have been made. */
 	if (version > pool_map_get_version(map)) {
 		D_DEBUG(DF_DSMS, "generating map %p version %u:\n",
