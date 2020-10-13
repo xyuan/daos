@@ -42,6 +42,18 @@ enum dtx_target_flags {
 	DTF_RDONLY			= (1 << 0),
 };
 
+enum dtx_mbs_flags {
+	/* The targets that are modified by the distributed transaction
+	 * are in the same single redundancy group.
+	 */
+	DMF_MODIFY_SRDG			= (1 << 0),
+	/* The MDS contains the leader information, used for distributed
+	 * transaction. For stand-alone modification, leader information
+	 * is not stored inside MBS as optimization.
+	 */
+	DMF_CONTAIN_LEADER		= (1 << 1),
+};
+
 /**
  * The daos target that participates in the DTX.
  */
@@ -104,14 +116,21 @@ struct dtx_memberships {
 	/* How many touched shards in the DTX. */
 	uint32_t			dm_tgt_cnt;
 
-	/* How many modification groups in the DTX. For single modification
-	 * group, be as optimization, we will nots store modification group
-	 * information inside 'dm_data'.
+	/* How many modification groups in the DTX. For standalone modification,
+	 * be as optimization, we will not store modification group information
+	 * inside 'dm_data'. Similarly for the distributed transaction that all
+	 * the touched targets are in the same redundancy group.
 	 */
 	uint32_t			dm_grp_cnt;
 
 	/* sizeof(dm_data). */
 	uint32_t			dm_data_size;
+
+	/* see dtx_mbs_flags. */
+	uint16_t			dm_flags;
+
+	/* For alignment. */
+	uint16_t			dm_padding;
 
 	/* The first 'sizeof(struct dtx_daos_target) * dm_tgt_cnt' is the
 	 * dtx_daos_target array. The subsequent are modification groups.

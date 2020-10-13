@@ -86,6 +86,7 @@ obj_gen_dtx_mbs(struct daos_shard_tgt *tgts, uint32_t *tgt_cnt,
 		mbs->dm_tgt_cnt = j;
 		mbs->dm_grp_cnt = 1;
 		mbs->dm_data_size = size;
+		mbs->dm_flags = DMF_MODIFY_SRDG;
 	}
 
 	*p_mbs = mbs;
@@ -3838,13 +3839,16 @@ ds_obj_dtx_leader_ult(void *arg)
 	else
 		tgts++;
 
-	/* For distributed transaction, ask DTX  to 'sync' commit. */
+	/* For single RDG based modification, ask the DTX to 'sync' commit. */
 	rc = dtx_leader_begin(dca->dca_ioc->ioc_coc, &dcsh->dcsh_xid,
 			      &dcsh->dcsh_epoch, dcde->dcde_write_cnt,
 			      oci->oci_map_ver, &dcsh->dcsh_leader_oid, NULL,
 			      0, tgts, tgt_cnt - 1,
 			      (tgt_cnt > 1 || dcde->dcde_write_cnt > 1) ?
-			      false : true, true, dcsh->dcsh_mbs, &dlh);
+			      false : true,
+			      (dcsh->dcsh_mbs->dm_flags & DMF_MODIFY_SRDG) ?
+			      false : true,
+			      dcsh->dcsh_mbs, &dlh);
 	if (rc != 0)
 		goto out;
 
