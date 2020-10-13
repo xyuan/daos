@@ -3633,6 +3633,12 @@ ds_obj_dtx_follower(crt_rpc_t *rpc, struct obj_io_context *ioc)
 		goto out;
 
 	rc = ds_obj_dtx_handle_one(rpc, dcsh, dcde, dcsr, ioc, &dth);
+	if (rc == 0 && dth.dth_modification_cnt == 0)
+		/* For the non-leader that only contains read sub operations,
+		 * we will generate DTX entry on it in DRAM for DTX recovery.
+		 */
+		rc = vos_dtx_pin(&dth);
+
 	rc = dtx_end(&dth, ioc->ioc_coc, rc);
 
 out:
