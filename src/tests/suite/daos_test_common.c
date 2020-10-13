@@ -665,7 +665,7 @@ rebuild_pool_wait(test_arg_t *arg)
 	pinfo.pi_bits = DPI_REBUILD_STATUS;
 	rc = test_pool_get_info(arg, &pinfo);
 	rst = &pinfo.pi_rebuild_st;
-	if (rst->rs_done || rc != 0) {
+	if ((rst->rs_done || rc != 0) && rst->rs_version != 0) {
 		print_message("Rebuild "DF_UUIDF" (ver=%d) is done %d/%d, "
 			      "obj="DF_U64", rec="DF_U64".\n",
 			       DP_UUID(arg->pool.pool_uuid), rst->rs_version,
@@ -856,13 +856,12 @@ daos_exclude_target(const uuid_t pool_uuid, const char *grp,
 }
 
 void
-daos_add_target(const uuid_t pool_uuid, const char *grp,
-		const char *dmg_config, const d_rank_list_t *svc,
-		d_rank_t rank, int tgt_idx)
+daos_reint_target(const uuid_t pool_uuid, const char *grp,
+		  const char *dmg_config, const d_rank_list_t *svc,
+		  d_rank_t rank, int tgt_idx)
 {
 	daos_dmg_pool_target("reintegrate", pool_uuid, grp, dmg_config, svc,
 			     rank, tgt_idx);
-
 }
 
 void
@@ -884,11 +883,11 @@ daos_exclude_server(const uuid_t pool_uuid, const char *grp,
 }
 
 void
-daos_add_server(const uuid_t pool_uuid, const char *grp,
-		const char *dmg_config, const d_rank_list_t *svc,
-		d_rank_t rank)
+daos_reint_server(const uuid_t pool_uuid, const char *grp,
+		  const char *dmg_config, const d_rank_list_t *svc,
+		  d_rank_t rank)
 {
-	daos_add_target(pool_uuid, grp, dmg_config, svc, rank, -1);
+	daos_reint_target(pool_uuid, grp, dmg_config, svc, rank, -1);
 }
 
 void
@@ -1107,7 +1106,7 @@ get_server_config(char *host, char *server_config_file)
 	pclose(fp);
 
 	D_FREE(dpid);
-	D_FREE(line);
+	free(line);
 	return 0;
 }
 
@@ -1138,7 +1137,7 @@ int verify_server_log_mask(char *host, char *server_config_file,
 	}
 
 	pclose(fp);
-	D_FREE(line);
+	free(line);
 	return 0;
 }
 
@@ -1164,7 +1163,7 @@ int get_server_log_file(char *host, char *server_config_file,
 	}
 
 	pclose(fp);
-	D_FREE(line);
+	free(line);
 	return 0;
 }
 
@@ -1200,7 +1199,7 @@ int verify_state_in_log(char *host, char *log_file, char *state)
 		}
 		pch = strtok(NULL, " ");
 		pclose(fp);
-		D_FREE(line);
+		free(line);
 	}
 
 	D_FREE(tmp);
