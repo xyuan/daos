@@ -51,6 +51,7 @@ type mgmtModule struct {
 	numaAware  bool
 	netCtx     context.Context
 	mutex      sync.Mutex
+	monitor    *procMon
 }
 
 func (mod *mgmtModule) HandleCall(session *drpc.Session, method drpc.Method, req []byte) ([]byte, error) {
@@ -115,6 +116,8 @@ func (mod *mgmtModule) handleGetAttachInfo(reqb []byte, pid int32) ([]byte, erro
 	// caching is enabled, there's data in the info cache and the agent can quickly return
 	// a response without the overhead of a mutex.
 	if mod.aiCache.isCached() {
+		req := NewProcMonRequest(pid, drpc.MethodGetAttachInfo.ID())
+		mod.monitor.request <- req
 		return mod.aiCache.getResponse(numaNode)
 	}
 
@@ -126,6 +129,8 @@ func (mod *mgmtModule) handleGetAttachInfo(reqb []byte, pid int32) ([]byte, erro
 	// If another thread succeeded in initializing the cache while this thread waited
 	// to get the mutex, return the cached response instead of initializing the cache again.
 	if mod.aiCache.isCached() {
+		req := NewProcMonRequest(pid, drpc.MethodGetAttachInfo.ID())
+		mod.monitor.request <- req
 		return mod.aiCache.getResponse(numaNode)
 	}
 
@@ -170,10 +175,24 @@ func (mod *mgmtModule) handleGetAttachInfo(reqb []byte, pid int32) ([]byte, erro
 		return nil, err
 	}
 
-	return mod.aiCache.getResponse(numaNode)
+	cacheResp, err := mod.aiCache.getResponse(numaNode)
+	if err != nil {
+		return nil, err
+	}
+
+	req := NewProcMonRequest(pid, drpc.MethodGetAttachInfo.ID())
+	mod.monitor.request <- req
+
+	return cacheResp, err
 }
 
+// handleDisconnect crafts a new request for the process monitor to inform the
+// monitor that a process is exiting. Even though the process is terminating
+// cleanly disconnect will inform the control plane of any outstanding handles
+// that the process held open.
 func (mod *mgmtModule) handleDisconnect(reqb []byte, pid int32) ([]byte, error) {
-	mod.log.Debugf("Disconnect is currently not implemented")
+	mod.log.Debugf("Attempting to disconnect pid:%d", pid)
+	req := NewProcMonRequest(pid, drpc.MethodDisconnect.ID())
+	mod.monitor.request <- req
 	return nil, nil
 }

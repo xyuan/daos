@@ -254,8 +254,10 @@ daos_fini(void)
 	dc_cont_fini();
 	dc_pool_fini();
 	dc_mgmt_fini();
+	dc_mgmt_disconnect();
 	dc_agent_fini();
 	dc_job_fini();
+
 
 	pl_fini();
 	daos_hhash_fini();
