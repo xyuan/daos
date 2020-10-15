@@ -86,6 +86,7 @@ struct dtx_req_rec {
 	struct dtx_req_args		*drr_parent; /* The top level args */
 	d_rank_t			 drr_rank; /* The server ID */
 	uint32_t			 drr_tag; /* The VOS ID */
+	uint32_t			 drr_flags; /* The flags. */
 	int				 drr_count; /* DTX count */
 	int				 drr_result; /* The RPC result */
 	struct dtx_id			*drr_dti; /* The DTX array */
@@ -164,7 +165,10 @@ dtx_req_send(struct dtx_req_rec *drr, daos_epoch_t epoch)
 		din = crt_req_get(req);
 		uuid_copy(din->di_po_uuid, dra->dra_po_uuid);
 		uuid_copy(din->di_co_uuid, dra->dra_co_uuid);
-		din->di_epoch = epoch;
+		if (drr->drr_flags & DTF_RDONLY)
+			din->di_epoch = epoch;
+		else
+			din->di_epoch = epoch;
 		din->di_dtx_array.ca_count = drr->drr_count;
 		din->di_dtx_array.ca_arrays = drr->drr_dti;
 
@@ -708,6 +712,7 @@ dtx_check(uuid_t po_uuid, uuid_t co_uuid, struct dtx_entry *dte)
 
 		drr->drr_rank = target->ta_comp.co_rank;
 		drr->drr_tag = target->ta_comp.co_index;
+		drr->drr_flags = mbs->dm_tgts[i].ddt_flags;
 		drr->drr_count = 1;
 		drr->drr_dti = &dte->dte_xid;
 		d_list_add_tail(&drr->drr_link, &head);
@@ -723,7 +728,7 @@ dtx_check(uuid_t po_uuid, uuid_t co_uuid, struct dtx_entry *dte)
 	}
 
 	rc = dtx_req_list_send(&dra, DTX_CHECK, &head, length, po_uuid,
-			       co_uuid, crt_hlc_get());
+			       co_uuid, 0);
 	if (rc == 0)
 		rc = dtx_req_wait(&dra);
 

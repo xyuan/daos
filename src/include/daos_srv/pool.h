@@ -209,7 +209,7 @@ int ds_pool_iv_srv_hdl_fetch(struct ds_pool *pool, uuid_t *pool_hdl_uuid,
 
 int ds_pool_svc_term_get(uuid_t uuid, uint64_t *term);
 
-int ds_pool_check_leader(uuid_t pool_uuid, daos_unit_oid_t *oid,
+int ds_pool_check_leader(struct ds_pool *pool, daos_unit_oid_t *oid,
 			 uint32_t version);
 
 int
