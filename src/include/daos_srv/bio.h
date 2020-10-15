@@ -618,7 +618,6 @@ int bio_get_dev_state(struct nvme_health_stats *dev_state,
  * \param dev_state	[OUT]	BIO blobstore state
  * \param xs		[IN]	xstream context
  *
- * \return			Zero on success, negative value on error
  */
 void bio_get_bs_state(int *blobstore_state, struct bio_xs_context *xs);
 
