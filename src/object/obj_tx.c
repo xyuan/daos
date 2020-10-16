@@ -1193,12 +1193,13 @@ dc_tx_classify_common(struct dc_tx *tx, struct daos_cpd_sub_req *dcsr,
 		if (rc != 0)
 			goto out;
 
-		D_ASSERTF(idx == shard->do_shard,
-			  "Invalid shard: idx %u, shard %u\n",
-			  idx, shard->do_shard);
+		/* XXX: It is possible that more than one shards locate on the
+		 *	same DAOS target under OSA mode, then the "idx" may be
+		 *	not equal to "shard->do_shard".
+		 */
 
 		D_ASSERTF(shard->do_target_id < dtrg_nr,
-			  "Invalid target index: idx %u, targets %u\n",
+			  "Invalid target ID: ID %u, targets %u\n",
 			  shard->do_target_id, dtrg_nr);
 
 		dtrg = &dtrgs[shard->do_target_id];
@@ -1243,7 +1244,7 @@ dc_tx_classify_common(struct dc_tx *tx, struct daos_cpd_sub_req *dcsr,
 
 		dcri = &dtrg->dtrg_req_idx[dtrg->dtrg_read_cnt +
 					   dtrg->dtrg_write_cnt];
-		dcri->dcri_shard_idx = idx;
+		dcri->dcri_shard_idx = shard->do_shard;
 		dcri->dcri_req_idx = req_idx;
 
 		if (read)
@@ -1280,14 +1281,14 @@ dc_tx_classify_common(struct dc_tx *tx, struct daos_cpd_sub_req *dcsr,
 				*leader_dtrg_idx = shard->do_target_id;
 				leader_dtr = dtr;
 				leader_oid->id_pub = obj->cob_md.omd_id;
-				leader_oid->id_shard = idx;
+				leader_oid->id_shard = shard->do_shard;
 			}
 		} else if (tmp->dtrg_write_cnt == 0) {
 			if (dtrg->dtrg_read_cnt > tmp->dtrg_read_cnt) {
 				*leader_dtrg_idx = shard->do_target_id;
 				leader_dtr = dtr;
 				leader_oid->id_pub = obj->cob_md.omd_id;
-				leader_oid->id_shard = idx;
+				leader_oid->id_shard = shard->do_shard;
 			}
 		}
 
@@ -1295,12 +1296,12 @@ dc_tx_classify_common(struct dc_tx *tx, struct daos_cpd_sub_req *dcsr,
 			*leader_dtrg_idx = shard->do_target_id;
 			leader_dtr = dtr;
 			leader_oid->id_pub = obj->cob_md.omd_id;
-			leader_oid->id_shard = idx;
+			leader_oid->id_shard = shard->do_shard;
 		}
 
 		if (dcu != NULL && dcu->dcu_ec_tgts != NULL) {
 			dcu->dcu_ec_tgts[dcsr->dcsr_ec_tgt_nr].dcet_shard_idx =
-							idx;
+							shard->do_shard;
 			dcu->dcu_ec_tgts[dcsr->dcsr_ec_tgt_nr++].dcet_tgt_id =
 							shard->do_target_id;
 		}
@@ -1851,6 +1852,14 @@ dc_tx_open_snap(tse_task_t *task)
 	return rc;
 }
 
+static void
+dc_tx_close_internal(struct dc_tx *tx)
+{
+	dc_tx_cleanup(tx);
+	dc_tx_hdl_unlink(tx);
+	dc_tx_decref(tx);
+}
+
 int
 dc_tx_close(tse_task_t *task)
 {
@@ -1871,10 +1880,7 @@ dc_tx_close(tse_task_t *task)
 		D_ERROR("Can't close a TX in committing\n");
 		rc = -DER_BUSY;
 	} else {
-		dc_tx_cleanup(tx);
-		dc_tx_hdl_unlink(tx);
-		/* -1 for create */
-		dc_tx_decref(tx);
+		dc_tx_close_internal(tx);
 	}
 	D_MUTEX_UNLOCK(&tx->tx_lock);
 
@@ -1963,10 +1969,7 @@ dc_tx_local_close(daos_handle_t th)
 		D_GOTO(out_tx, rc = -DER_BUSY);
 	}
 
-	dc_tx_cleanup(tx);
-	dc_tx_hdl_unlink(tx);
-	/* -1 for create */
-	dc_tx_decref(tx);
+	dc_tx_close_internal(tx);
 
 out_tx:
 	D_MUTEX_UNLOCK(&tx->tx_lock);
@@ -2614,6 +2617,114 @@ dc_tx_attach(daos_handle_t th, enum obj_rpc_opc opc, tse_task_t *task)
 
 	D_MUTEX_UNLOCK(&tx->tx_lock);
 	dc_tx_decref(tx);
+
+	return rc;
+}
+
+static int
+dc_tx_convert_cb(tse_task_t *task, void *data)
+{
+	dc_tx_close_internal(data);
+	return 0;
+}
+
+int
+dc_tx_convert(enum obj_rpc_opc opc, tse_task_t *task)
+{
+	daos_handle_t		 coh;
+	daos_tx_commit_t	*args;
+	daos_obj_update_t	*up = NULL;
+	daos_obj_punch_t	*pu = NULL;
+	tse_task_t		*tx_task = NULL;
+	struct dc_tx		*tx = NULL;
+	int			 rc = 0;
+
+	switch (opc) {
+	case DAOS_OBJ_RPC_UPDATE:
+		up = dc_task_get_args(task);
+		coh = dc_obj_hdl2cont_hdl(up->oh);
+		break;
+	case DAOS_OBJ_RPC_PUNCH:
+	case DAOS_OBJ_RPC_PUNCH_DKEYS:
+	case DAOS_OBJ_RPC_PUNCH_AKEYS:
+		pu = dc_task_get_args(task);
+		coh = dc_obj_hdl2cont_hdl(pu->oh);
+		break;
+	default:
+		D_ERROR("Unsupportted TX convert opc %d\n", opc);
+		D_GOTO(out, rc = -DER_INVAL);
+	}
+
+	rc = dc_tx_alloc(coh, 0, 0, true, &tx);
+	if (rc != 0) {
+		D_ERROR("Fail to open TX for opc %u: "DF_RC"\n",
+			opc, DP_RC(rc));
+		goto out;
+	}
+
+	switch (opc) {
+	case DAOS_OBJ_RPC_UPDATE:
+		rc = dc_tx_add_update(tx, up->oh, up->flags, up->dkey,
+				      up->nr, up->iods, up->sgls);
+		break;
+	case DAOS_OBJ_RPC_PUNCH:
+		rc = dc_tx_add_punch_obj(tx, pu->oh, pu->flags);
+		break;
+	case DAOS_OBJ_RPC_PUNCH_DKEYS:
+		rc = dc_tx_add_punch_dkey(tx, pu->oh, pu->flags, pu->dkey);
+		break;
+	case DAOS_OBJ_RPC_PUNCH_AKEYS:
+		rc = dc_tx_add_punch_akeys(tx, pu->oh, pu->flags, pu->dkey,
+					   pu->akey_nr, pu->akeys);
+		break;
+	default:
+		D_ASSERT(0);
+	}
+
+	if (rc != 0) {
+		D_ERROR("Fail to attach TX for opc %u: "DF_RC"\n",
+			opc, DP_RC(rc));
+		goto out;
+	}
+
+	rc = dc_task_create(dc_tx_commit, tse_task2sched(task), NULL, &tx_task);
+	if (rc != 0) {
+		D_ERROR("Fail to create tx convert task for opc %u: "DF_RC"\n",
+			opc, DP_RC(rc));
+		goto out;
+	}
+
+	args = dc_task_get_args(tx_task);
+	args->th = dc_tx_ptr2hdl(tx);
+	args->flags = 0;
+
+	rc = dc_task_depend(task, 1, &tx_task);
+	if (rc != 0) {
+		D_ERROR("Fail to add dep on TX convert task: "DF_RC"\n",
+			DP_RC(rc));
+		goto out;
+	}
+
+	task = NULL;
+	rc = tse_task_register_comp_cb(tx_task, dc_tx_convert_cb, tx,
+				       sizeof(*tx));
+	if (rc != 0) {
+		D_ERROR("Fail to add CB for TX convert task: "DF_RC"\n",
+			DP_RC(rc));
+		goto out;
+	}
+
+	return dc_task_schedule(tx_task, true);
+
+out:
+	if (tx_task != NULL)
+		tse_task_complete(tx_task, rc);
+
+	if (task != NULL)
+		tse_task_complete(task, rc);
+
+	if (tx != NULL)
+		dc_tx_close_internal(tx);
 
 	return rc;
 }
