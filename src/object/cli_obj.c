@@ -173,9 +173,9 @@ open_retry:
 			goto open_retry;
 		}
 
-		memset(&oid, 0, sizeof(oid));
-		oid.id_shard = obj_shard->do_shard;
-		oid.id_pub   = obj->cob_md.omd_id;
+		oid.id_shard  = obj_shard->do_shard;
+		oid.id_pub    = obj->cob_md.omd_id;
+		oid.id_pad_32 = 0;
 		/* NB: obj open is a local operation, so it is ok to call
 		 * it in sync mode, at least for now.
 		 */
@@ -1144,8 +1144,10 @@ dc_obj_fetch_md(daos_obj_id_t oid, struct daos_obj_md *md)
 	/* For predefined object classes, do nothing at here. But for those
 	 * customized classes, we need to fetch for the remote OI table.
 	 */
-	memset(md, 0, sizeof(*md));
-	md->omd_id = oid;
+	md->omd_id      = oid;
+	md->omd_ver     = 0;
+	md->omd_padding = 0;
+	md->omd_loff    = 0;
 	return 0;
 }
 

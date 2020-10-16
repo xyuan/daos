@@ -219,21 +219,28 @@ uint16_t bio_iov2media(const struct bio_iov *biov)
 static inline int
 bio_sgl_init(struct bio_sglist *sgl, unsigned int nr)
 {
-	memset(sgl, 0, sizeof(*sgl));
-
+	sgl->bs_nr_out = 0;
 	sgl->bs_nr = nr;
+
+	if (nr == 0) {
+		sgl->bs_iovs = NULL;
+		return 0;
+	}
+
 	D_ALLOC_ARRAY(sgl->bs_iovs, nr);
+
 	return sgl->bs_iovs == NULL ? -DER_NOMEM : 0;
 }
 
 static inline void
 bio_sgl_fini(struct bio_sglist *sgl)
 {
-	if (sgl->bs_iovs == NULL)
+	if (sgl == NULL || sgl->bs_iovs == NULL)
 		return;
 
 	D_FREE(sgl->bs_iovs);
-	memset(sgl, 0, sizeof(*sgl));
+	sgl->bs_nr_out = 0;
+	sgl->bs_nr = 0;
 }
 
 /*

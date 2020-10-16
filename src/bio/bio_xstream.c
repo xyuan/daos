@@ -242,7 +242,7 @@ populate_whitelist(struct spdk_env_opts *opts)
 		return -DER_NOMEM;
 
 	for (i = 0; i < DAOS_NVME_MAX_CTRLRS; i++) {
-		memset(trid, 0, sizeof(struct spdk_nvme_transport_id));
+		memset(trid, 0, sizeof(*trid));
 
 		val = spdk_conf_section_get_nmval(sp, "TransportID", i, 0);
 		if (val == NULL) {
@@ -536,8 +536,9 @@ struct common_cp_arg {
 static void
 common_prep_arg(struct common_cp_arg *arg)
 {
-	memset(arg, 0, sizeof(*arg));
 	arg->cca_inflights = 1;
+	arg->cca_rc = 0;
+	arg->cca_bs = NULL;
 }
 
 static void

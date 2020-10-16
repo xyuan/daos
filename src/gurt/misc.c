@@ -463,9 +463,14 @@ out:
 int
 d_sgl_init(d_sg_list_t *sgl, unsigned int nr)
 {
-	memset(sgl, 0, sizeof(*sgl));
+	sgl->sg_nr_out = 0;
+	sgl->sg_nr = nr;
 
-	sgl->sg_nr = sgl->sg_nr_out = nr;
+	if (nr == 0) {
+		sgl->sg_iovs = NULL;
+		return 0;
+	}
+
 	D_ALLOC_ARRAY(sgl->sg_iovs, nr);
 
 	return sgl->sg_iovs == NULL ? -DER_NOMEM : 0;
@@ -480,14 +485,15 @@ d_sgl_fini(d_sg_list_t *sgl, bool free_iovs)
 {
 	int	i;
 
-	if (sgl->sg_iovs == NULL)
+	if (sgl == NULL || sgl->sg_iovs == NULL)
 		return;
 
 	for (i = 0; free_iovs && i < sgl->sg_nr; i++)
 		D_FREE(sgl->sg_iovs[i].iov_buf);
 
 	D_FREE(sgl->sg_iovs);
-	memset(sgl, 0, sizeof(*sgl));
+	sgl->sg_nr_out = 0;
+	sgl->sg_nr = 0;
 }
 
 static inline bool

@@ -708,15 +708,10 @@ static void
 clear_iod(daos_iod_t *iod, d_sg_list_t *sgl, int *recxs_cap)
 {
 	daos_iov_free(&iod->iod_name);
-	if (iod->iod_recxs != NULL)
-		D_FREE(iod->iod_recxs);
+	D_FREE(iod->iod_recxs);
 	memset(iod, 0, sizeof(*iod));
 
-	if (sgl != NULL) {
-		if (sgl->sg_iovs != NULL)
-			D_FREE(sgl->sg_iovs);
-		memset(sgl, 0, sizeof(*sgl));
-	}
+	d_sgl_fini(sgl, false);
 
 	*recxs_cap = 0;
 }
@@ -729,8 +724,7 @@ clear_iod_csum(struct dcs_iod_csums *iod_csum)
 		return;
 
 	for (i = 0; i < iod_csum->ic_nr; i++)
-		if (iod_csum->ic_data[i].cs_csum != NULL)
-			D_FREE(iod_csum->ic_data->cs_csum);
+		D_FREE(iod_csum->ic_data->cs_csum);
 
 	D_FREE(iod_csum->ic_data);
 }

@@ -261,7 +261,9 @@ struct enum_server_arg {
 static void
 enum_server_arg_init(struct enum_server_arg *arg)
 {
-	memset(arg, 0, sizeof(*arg));
+	arg->esa_servers     = NULL;
+	arg->esa_servers_cap = 0;
+	arg->esa_servers_len = 0;
 }
 
 static void

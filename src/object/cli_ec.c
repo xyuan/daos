@@ -150,9 +150,7 @@ obj_ec_seg_sorter_init(struct obj_ec_seg_sorter *sorter, uint32_t tgt_nr,
 void
 obj_ec_seg_sorter_fini(struct obj_ec_seg_sorter *sorter)
 {
-	if (sorter->ess_tgts != NULL)
-		D_FREE(sorter->ess_tgts);
-	memset(sorter, 0, sizeof(*sorter));
+	D_FREE(sorter->ess_tgts);
 }
 
 static void
