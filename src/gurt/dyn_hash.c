@@ -26,6 +26,7 @@
 #define D_LOGFAC	DD_FAC(mem)
 #include <gurt/common.h>
 #include <gurt/list.h>
+#include <gurt/hash.h>
 #include <gurt/dyn_hash.h>
 
 #define DYNHASH_SIPBITS 6
@@ -65,7 +66,7 @@ typedef struct dh_bucket
 const char keys[16] = { 0,1,2,3,4,5,6,7,8,9,0xa,0xb,0xc,0xd,0xe,0xf };
 
 static uint64_t
-siphash (const void *src, uint32_t src_sz)
+gen_siphash (const void *src, uint32_t src_sz)
 {
 	const uint64_t *_key = (uint64_t*) keys;
 	uint64_t 	k0 = _le64toh(_key[0]);
@@ -124,7 +125,7 @@ vec_init (dh_vector_t *vec, unsigned char power)
 
 	memset (vec, 0, sizeof *vec);
 	vec->size = (size_t) (1 << power) * sizeof(void*);
-	D_ALLOC_ARRAY(vec->data, 1 << power);
+	D_ALLOC(vec->data, sizeof *vec->data * (1 << power));
 	if (vec->data == NULL) {
 		rc = -DER_NOMEM;
 	}
@@ -157,138 +158,543 @@ vec_reset (dh_vector_t *vec)
 {
 	vec->counter = 0;
 }
-static inline int
-vec_expand (dh_vector_t *vec)
-{
-	int	rc = 0;
-	size_t	size = vec->size;
-	void	**data;
 
-	D_ALLOC(data, size * 2);
-	if (data == NULL) {
-		D_GOTO(out, rc = -DER_NOMEM);
-	}
-	//D_FREE_PTR(vec->data);
-	vec->data = data;
-	vec->size *= 2;
-	vec->counter *= 2;
-out:
-	return rc;
-}
-
+/*--------Virtual internal functions-----------------*/
 static inline void
-bucket_lock(struct dyn_hash *htable, uint32_t lock_index)
+bucket_lock(struct dyn_hash *htable, dh_bucket_t *bucket)
 {
-	lock_index %= htable->ht_bucket_locks;
+	uint32_t lock_index = (uint32_t)(((uint64_t)bucket % sizeof *bucket) 
+				% htable->ht_bucket_locks);
 	D_MUTEX_LOCK(&htable->ht_bmutex[lock_index]);
 }
 static inline void
-bucket_unlock(struct dyn_hash *htable, uint32_t lock_index)
+bucket_unlock(struct dyn_hash *htable, dh_bucket_t *bucket)
 {
-	lock_index %= htable->ht_bucket_locks;
+        uint32_t lock_index = (uint32_t)(((uint64_t)bucket % sizeof *bucket)
+                                % htable->ht_bucket_locks);
 	D_MUTEX_UNLOCK(&htable->ht_bmutex[lock_index]);
 }
 static void
-no_bucket_lock(struct dyn_hash *htable, uint32_t lock_index)
+no_bucket_lock(struct dyn_hash *htable, dh_bucket_t *bucket)
 {
 }
 static inline void
 read_lock(struct dyn_hash *htable)
 {
-	D_RWLOCK_RDLOCK(&htable->ht_lock.rwlock);
+	D_RWLOCK_RDLOCK(&htable->gtable->ht_lock.rwlock);
 }
 static inline void
 write_lock(struct dyn_hash *htable)
 {
-	D_RWLOCK_WRLOCK(&htable->ht_lock.rwlock);
+	D_RWLOCK_WRLOCK(&htable->gtable->ht_lock.rwlock);
 }
 static inline void
 mutex_lock(struct dyn_hash *htable)
 {
-	D_MUTEX_LOCK(&htable->ht_lock.mutex);
+	D_MUTEX_LOCK(&htable->gtable->ht_lock.mutex);
 }
 static inline void
 spinlock(struct dyn_hash *htable)
 {
-	D_SPIN_LOCK(&htable->ht_lock.spin);
+	D_SPIN_LOCK(&htable->gtable->ht_lock.spin);
 }
 static inline void
 rw_unlock(struct dyn_hash *htable)
 {
-	D_RWLOCK_UNLOCK(&htable->ht_lock.rwlock);
+	D_RWLOCK_UNLOCK(&htable->gtable->ht_lock.rwlock);
 }
 static inline void
 mutex_unlock(struct dyn_hash *htable)
 {
-	D_MUTEX_UNLOCK(&htable->ht_lock.mutex);
+	D_MUTEX_UNLOCK(&htable->gtable->ht_lock.mutex);
 }
 static inline void
 spinunlock(struct dyn_hash *htable)
 {
-	D_SPIN_UNLOCK(&htable->ht_lock.spin);
+	D_SPIN_UNLOCK(&htable->gtable->ht_lock.spin);
 }
 static void no_global_lock(struct dyn_hash *htable)
 {
+}
 
+/*-----------Default customized member functions-------*/
+static inline bool
+def_hop_getkey(dh_item_t item, void **key, unsigned int *ksize)
+{
+	return false;
+}
+static inline void
+def_hop_siphash_set(dh_item_t item, uint64_t siphash)
+{
+}
+static inline void
+def_hop_addref_free(struct d_hash_table *gtable, d_list_t *item)
+{
+}
+static inline bool
+def_hop_decref(struct d_hash_table *gtable, d_list_t *item)
+{
+	return false;
+}
+static inline int
+def_hop_ndecref(struct d_hash_table *gtable, d_list_t *item, int count)
+{
+	return 0;
+}
+/*-----End of default customized member functions--*/
+
+static inline void
+prepare_insert(dh_bucket_t *bucket, unsigned char index)
+{
+	dh_field_t* start = &bucket->field[index];
+	dh_field_t* dst = &bucket->field[bucket->counter];
+	dh_field_t* src = &bucket->field[bucket->counter - 1];
+
+	/* TODO it looks like memmove should be used */
+    do {
+        *dst-- = *src--;
+    } while (src >= start);
+}
+static inline void
+prepare_lookup (dh_bucket_t *bucket, uint64_t siphash,
+		unsigned char *out_first,
+		unsigned char *out_last)
+{
+	unsigned char first = 0;
+	unsigned char last = bucket->counter;
+	unsigned char middle;
+	unsigned char len = last;
+
+	while (len > 4) {
+		middle = last - (len >> 1);
+		if (bucket->field[middle].siphash > siphash) {
+			last = middle;
+			len = len >> 1;
+		} else if (bucket->field[middle].siphash < siphash) {
+			first = middle;
+			len = len >> 1;
+		} else {
+			first = last = middle;
+		}
+	}
+	if (last != bucket->counter) {
+		last++;
+	}
+	*out_first = first;
+	*out_last = last;
+}
+
+static inline unsigned char
+find_insert_index(dh_bucket_t* bucket, uint64_t siphash)
+{
+	unsigned char	idx;
+	dh_field_t	*field;
+	unsigned char	first;
+	unsigned char	last;
+
+	if (bucket->counter == 0) {
+		return 0;
+	}
+	prepare_lookup (bucket, siphash, &first, &last);
+	for (idx = first; idx < last; idx++) {
+		field = &bucket->field[idx];
+		if (field->siphash == siphash) {
+			break;
+		}
+		if (field->siphash > siphash) {
+			break;
+		}
+	}
+	return idx;
+}
+
+static inline int
+find_exact_match (struct dyn_hash *htable, dh_bucket_t *bucket,
+			uint64_t siphash, const void *key,
+			unsigned int ksize)
+{
+	unsigned char   idx;
+	unsigned char   first;
+	unsigned char   last;
+	int 		rc = -DER_NONEXIST;
+
+	prepare_lookup (bucket, siphash, &first, &last);
+
+	for (idx = first; idx < last; idx++) {
+		if (bucket->field[idx].siphash == siphash) {
+			break;
+		}
+	}
+	if (idx == last) {
+		D_GOTO(out, rc);
+	}
+	while (idx != 0 && bucket->field[idx - 1].siphash == siphash) {
+		idx--;
+	}
+	for (; idx < last; idx++) {
+		if (htable->ht_ops.hop_key_cmp(htable->gtable,
+					       bucket->field[idx].record,
+					       key, ksize)) {
+			D_GOTO(out, rc = (int)idx);
+		}
+	}
+out:
+	return rc;
 }
 static void
-destroy_bucket_locks(struct dyn_hash *htable, uint32_t limit)
+shrink_vector(struct dyn_hash *htable, dh_bucket_t* bucket,
+	      uint32_t index)
 {
+
+	uint32_t	last_idx;
+	uint32_t	first_idx;
 	uint32_t	idx;
 
-	for (idx = 0; idx < limit; idx++) {
-		D_MUTEX_DESTROY(&htable->ht_bmutex[idx]);
+	if (!(htable->gtable->ht_feats & D_HASH_FT_SHRINK)) {
+		return;
+	}
+	last_idx = htable->ht_vector.counter;
+	first_idx = 0xffffffff;
+
+	for (idx = 0; idx < htable->ht_vector.counter; idx++) {
+		if (htable->ht_vector.data[idx] == bucket) {
+			first_idx = idx;
+			break;
+		}
+	}
+	D_ASSERT (first_idx != 0xffffffff);
+	for (; idx < htable->ht_vector.counter; idx++) {
+		if (htable->ht_vector.data[idx] != bucket) {
+			last_idx = idx;
+			break;
+		}
+	}
+	if (last_idx == htable->ht_vector.counter && first_idx == 0) {
+		return;
+	}
+	if (first_idx == 0) {
+		for (idx = 0; idx < last_idx; idx++) {
+			htable->ht_vector.data[idx] = htable->ht_vector.data[last_idx];
+		}
+	} else {
+		for (idx = first_idx; idx < last_idx; idx++) {
+			htable->ht_vector.data[idx] = htable->ht_vector.data[first_idx - 1];
+		}
 	}
 }
-/*----------Public API-------------------------*/
-int
-dyn_hash_create(uint32_t feats, uint32_t bits,
-		dyn_hash_ops_t *hops, struct dyn_hash **htable_pp)
+
+static int
+split_bucket (struct dyn_hash *htable, dh_bucket_t* bucket,
+	      dh_bucket_t ** new_bucket)
 {
-	struct dyn_hash		*htable;
+	dh_bucket_t 	*add_bucket = NULL;
+	unsigned char 	idx;
+	unsigned char	ix;
+	int 		rc = 0;
+	uint32_t	vector_idx = (uint32_t) (bucket->field[DYNHASH_BUCKET / 2].siphash >> htable->ht_shift);
+	uint32_t	bucket_idx;
+	uint32_t	counter = 0;
+	uint32_t        new_counter = 0;
+	bool            b_switch = false;
+
+	D_ASSERT(new_bucket != NULL);
+	D_ASSERT (bucket->counter == DYNHASH_BUCKET);
+	vector_idx = (uint32_t) (bucket->field[DYNHASH_BUCKET / 2].siphash
+			>> htable->ht_shift);
+
+	D_ALLOC(add_bucket, sizeof *bucket);
+	if (add_bucket == NULL) {
+		D_GOTO(out, rc = -DER_NOMEM);
+	}
+	memset(add_bucket, 0, sizeof *add_bucket);
+	for (idx = 0, ix = 0; idx < bucket->counter; idx++) {
+		bucket_idx = (uint32_t) (bucket->field[idx].siphash >> htable->ht_shift);
+		if (bucket_idx <= vector_idx) {
+			D_ASSERT(!b_switch);
+			counter++;
+			continue;
+		} else {
+			b_switch = true;
+			add_bucket->field[ix++] = bucket->field[idx];
+			new_counter++;
+		}
+	}
+	if (new_counter == 0) {
+		D_GOTO(out, rc = -DER_AGAIN);
+	}
+	D_ASSERT((counter + new_counter) == bucket->counter);
+	bucket->counter = counter;
+	add_bucket->counter = new_counter;
+out:
+	if( rc != 0) {
+		D_FREE(add_bucket);
+	} else {
+		*new_bucket = add_bucket;
+	}
+	return rc;
+}
+static int
+split_vector (struct dyn_hash *htable)
+{
+	void 		**current_data = htable->ht_vector.data;
+	void		**new_data;
+	uint32_t	idx;
+	uint32_t	ix;
+	uint32_t	index;
+	int		rc = 0;
+	uint32_t	counter;
+	void		**src;
+	void		**dst;
+#if DYN_HASH_DEBUG
+	struct timeval 	begit;
+	struct timeval  end;
+
+
+	gettimeofday(begit, NULL);
+#endif
+	counter = htable->ht_vector.counter;
+	D_ALLOC(new_data, htable->ht_vector.size * 2);
+	if (new_data == NULL) {
+		D_GOTO(out, rc = -DER_NOMEM);
+	}
+	/* duplicate twice each vector reference */
+	for (idx = 0; idx < (counter / DYNHASH_BUCKET); idx++) {
+		dst = &new_data[idx * DYNHASH_BUCKET * 2];
+		src = &current_data[idx * DYNHASH_BUCKET];
+		for (ix = 0, index = 0; index < DYNHASH_BUCKET; ix++, index++) {
+			dst[ix++] = src[index];
+			dst[ix] = src[index];
+		}
+	}
+	htable->ht_shift--;
+
+	/* update vector */
+	D_FREE(current_data);
+	htable->ht_vector.data = new_data;
+	htable->ht_vector.counter *= 2;
+	htable->ht_vector.size *= 2;
+out:
+#if DYN_HASH_DEBUG
+	gettimeofday(end, NULL);
+	do {
+		uint64_t start = begin.tv_sec * 1000000 + begin.tv_usec;
+		uint64_t stop = end.tv_sec * 1000000 + end.tv_usec;
+		htable->ht_vsplits++;
+		htable->ht_vsplit_delay += (uint32_t)(stop - start);
+	} while(0);
+#endif
+	return rc;
+}
+
+static void
+add_record(dh_bucket_t *bucket, uint64_t siphash, dh_item_t item)
+{
+	unsigned char 	idx;
+
+	idx = find_insert_index(bucket, siphash);
+	prepare_insert(bucket, idx);
+	bucket->field[idx].siphash = siphash;
+	bucket->field[idx].record = item;
+	bucket->counter++;
+}
+typedef enum {
+	DH_INSERT_INCLUSIVE = 0,
+	DH_INSERT_EXCLUSIVE = 1,
+	DH_LOOKUP_INSERT    = 3,_
+}dh_insert_mode_t;
+
+static int
+do_insert(struct dyn_hash *htable, const void *key,
+			unsigned int ksize, dh_item_t *item, uint64_t siphash,
+			dh_insert_mode_t mode)
+{
+	dh_item_t 	data = *item;
+	uint64_t	sk1;
+	uint64_t	sk2;
+	uint32_t	index;
+	dh_bucket_t	*bucket;
+	dh_bucket_t	*prev_bucket;
+	dh_bucket_t	*splt_bucket;
+	int		rc = 0;
+	uint32_t	idx;
+
+	index = (uint32_t)(siphash >> htable->ht_shift);
+	htable->ht_write_lock(htable);
+	bucket = htable->ht_vector.data[index];
+	if ( mode == DH_INSERT_EXCLUSIVE ||
+			mode == DH_LOOKUP_INSERT) {
+		rc = find_exact_match(htable, bucket, siphash,
+				      key, ksize);
+		if (rc >= 0 && mode == DH_INSERT_EXCLUSIVE) {
+			htable->ht_rw_unlock(htable);
+			D_GOTO(out, rc = -DER_EXIST);
+		}
+		if (rc >= 0 && mode == DH_LOOKUP_INSERT) {
+			*item = bucket->field[rc].record;
+			htable->ht_rw_unlock(htable);
+			htable->ht_ops.hop_rec_addref(htable->gtable, *item);
+			D_GOTO(out, rc = 0);
+		}
+	}
+	rc = 0;
+	if( bucket->counter == DYNHASH_BUCKET ) {
+		/* bucket is full */
+		rc = split_bucket(htable, bucket, &splt_bucket);
+		if ( rc == -DER_AGAIN) {
+			/* bucket split can't  update vector;
+			 *  vector is full
+			 */
+			rc = split_vector(htable);
+			if ( rc == 0 ) {
+				rc = -DER_AGAIN;
+			}
+		}
+		if (rc != 0) {
+			htable->ht_rw_unlock(htable);
+			D_GOTO(out, rc);
+		}
+		sk1 = splt_bucket->field[0].siphash;
+		index = (uint32_t)(sk1 >> htable->ht_shift);
+		prev_bucket = htable->ht_vector.data[index];
+		sk2 = prev_bucket->field[0].siphash;
+
+		/* make sure vector is ready for bucket updates */
+		if(index == (uint32_t) (sk2 >> htable->ht_shift)) {
+			rc = split_vector(htable);
+			if(rc == 0) {
+				rc = -DER_AGAIN;
+			}
+			htable->ht_rw_unlock(htable);
+			D_GOTO(out, rc);
+		}
+		/* update vector */
+		for(idx = index; idx < htable->ht_vector.counter; idx++) {
+			if (prev_bucket == htable->ht_vector.data[idx]) {
+				htable->ht_vector.data[idx] = splt_bucket;
+			} else {
+				break;
+			}
+		}
+		index = (uint32_t)(siphash >> htable->ht_shift);
+		bucket = htable->ht_vector.data[index];
+	}
+	htable->bucket_lock(htable, bucket);
+	htable->ht_records++;
+#if DYN_HASH_DEBUG
+	if (htable->ht_nr_max < htable->ht_records) {
+		htable->ht_nr_max = htable->ht_records;
+	}
+#endif
+	htable->ht_rw_unlock(htable);
+	add_record(bucket, siphash, data);
+	htable->bucket_unlock(htable, bucket);
+out:
+	return rc;
+}
+
+/*----------External API-------------------------*/
+int
+dyn_hash_create(uint32_t feats, uint32_t bits, void *priv,
+		d_hash_table_ops_t *hops, struct d_hash_table **htable_pp)
+{
+	struct d_hash_table     *gtable;
 	int			rc;
 
-	D_ALLOC_PTR(htable);
-	if (htable == NULL)
+	D_ALLOC_PTR(gtable);
+	if (gtable == NULL) {
 		D_GOTO(out, rc = -DER_NOMEM);
-
-	rc = dyn_hash_table_create_inplace(feats, bits, hops, htable);
-	if (rc)
-		D_FREE(htable);
+	}
+	memset(gtable, 0, sizeof *gtable);
+	D_ALLOC_PTR(gtable->dyn_hash);
+	if(gtable->dyn_hash == NULL) {
+		D_FREE(gtable);
+		D_GOTO(out, rc = -DER_NOMEM);
+	}
+	memset(gtable->dyn_hash, 0, sizeof *gtable->dyn_hash);
+	rc = dyn_hash_table_create_inplace(feats, bits, priv, hops, gtable);
+	if (rc) {
+		D_FREE(gtable->dyn_hash);
+		D_FREE(gtable);
+	}
 out:
-	*htable_pp = htable;
+	*htable_pp = gtable;
 	return rc;
 }
 
 int
-dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
-		dyn_hash_ops_t *hops, struct dyn_hash *htable)
+dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits, void *priv,
+		d_hash_table_ops_t *hops, struct d_hash_table *gtable)
 {
 	int 		rc = 0;
 	uint32_t	idx;
+	uint32_t        ix;
 	dh_bucket_t     *bucket;
+	struct dyn_hash *htable = gtable->dyn_hash;
 
 	D_ASSERT(hops != NULL);
 	D_ASSERT(hops->hop_key_cmp != NULL);
-	memset(htable, 0, sizeof *htable);
-	htable->ht_feats = feats;
+	D_ASSERT(feats & D_HASH_FT_DYNAMIC);
+
+	gtable->ht_feats = feats;
+	gtable->ht_priv = priv;
+	htable->gtable = gtable;
 	htable->bucket_lock = no_bucket_lock;
 	htable->bucket_unlock = no_bucket_lock;
+	htable->ht_shift = (sizeof(uint64_t) * 8) - DYNHASH_SIPBITS;
 
-	/* set global lock */
+	/* set specified customized functions */
+	htable->ht_ops.hop_key_cmp = hops->hop_key_cmp;
+	if (hops->hop_key_get != NULL) {
+		htable->ht_ops.hop_key_get = hops->hop_key_get;
+	} else {
+		htable->ht_ops.hop_key_get = def_hop_getkey;
+	}
+	if (hops->hop_rec_addref != NULL &&
+			!(gtable->ht_feats & D_HASH_FT_EPHEMERAL)) {
+
+		htable->ht_ops.hop_rec_addref = hops->hop_rec_addref;
+	} else {
+		htable->ht_ops.hop_rec_addref = def_hop_addref_free;
+	}
+	if (hops->hop_rec_decref != NULL &&
+			!(gtable->ht_feats & D_HASH_FT_EPHEMERAL)) {
+
+		htable->ht_ops.hop_rec_decref = hops->hop_rec_decref;
+	} else {
+		htable->ht_ops.hop_rec_decref = def_hop_decref;
+	}
+	if (hops->hop_rec_free != NULL) {
+		htable->ht_ops.hop_rec_free = hops->hop_rec_free;
+	} else {
+		htable->ht_ops.hop_rec_free = def_hop_addref_free;
+	}
+	if (hops->hop_rec_ndecref != NULL &&
+			!(gtable->ht_feats & D_HASH_FT_EPHEMERAL)) {
+
+		htable->ht_ops.hop_rec_ndecref = hops->hop_rec_ndecref;
+	} else {
+		htable->ht_ops.hop_rec_ndecref = def_hop_ndecref;
+	}
+	if (hops->hop_siphash_set != NULL) {
+		htable->ht_ops.hop_siphash_set = hops->hop_siphash_set;
+	} else {
+		htable->ht_ops.hop_siphash_set = def_hop_siphash_set;
+	}
+
+	/* set global lock virtual function */
 	htable->ht_write_lock = no_global_lock;
 	htable->ht_read_lock = no_global_lock;
-	if (!(feats & DYN_HASH_FT_NOLOCK)) {
-		if (feats & DYN_HASH_FT_MUTEX) {
-			rc = D_MUTEX_INIT(&htable->ht_lock.mutex, NULL);
+	if (!(feats & D_HASH_FT_NOLOCK)) {
+		if (feats & D_HASH_FT_MUTEX) {
+			rc = D_MUTEX_INIT(&gtable->ht_lock.mutex, NULL);
 			if( rc != 0 ){
 				D_GOTO(out, rc);
 			}
 			htable->ht_write_lock = mutex_lock;
 			htable->ht_read_lock = mutex_lock;
 			htable->ht_rw_unlock = mutex_unlock;
-		} else if (feats & DYN_HASH_FT_RWLOCK) {
-			rc = D_RWLOCK_INIT(&htable->ht_lock.rwlock, NULL);
+		} else if (feats & D_HASH_FT_RWLOCK) {
+			rc = D_RWLOCK_INIT(&gtable->ht_lock.rwlock, NULL);
 			if( rc != 0 ){
 				D_GOTO(out, rc);
 			}
@@ -296,7 +702,7 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 			htable->ht_read_lock = read_lock;
 			htable->ht_rw_unlock = rw_unlock;
 		} else {
-			rc = D_SPIN_INIT(&htable->ht_lock.spin,
+			rc = D_SPIN_INIT(&gtable->ht_lock.spin,
 					 PTHREAD_PROCESS_PRIVATE);
 			if( rc != 0 ){
 				D_GOTO(out, rc);
@@ -308,25 +714,26 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 	}
 
 	/* create bucket locks if applicable */
-	if (bits != 0 && !(feats & DYN_HASH_FT_NOLOCK)) {
+	if (bits != 0 && !(feats & D_HASH_FT_NOLOCK)) {
 		htable->ht_bucket_locks = (1 << bits); /* TO DO Do we need a limit here? */
-		D_ALLOC_ARRAY(htable->ht_bmutex, htable->ht_bucket_locks);
+		D_ALLOC(htable->ht_bmutex, sizeof *htable->ht_bmutex * htable->ht_bucket_locks);
 		if (htable->ht_bmutex == NULL) {
 			D_GOTO(out3, rc = -DER_NOMEM);
 		}
 		for(idx = 0; idx < htable->ht_bucket_locks; idx++) {
 		        rc = D_MUTEX_INIT(&htable->ht_bmutex[idx], NULL);
-		        if (rc != 0) {
-		        	destroy_bucket_locks(htable, idx);
-		        }
-		        D_GOTO(out2, rc = -DER_INVAL);
+		        if ( rc != 0) {
+		        	for (ix = 0; rc != 0 && ix < idx; ix++) {
+		        		D_MUTEX_DESTROY(&htable->ht_bmutex[ix]);
+				}
+				D_GOTO(out2, rc);
+		        }	
 		}
 		/* set bucket lock virtual function */
 		htable->bucket_lock = bucket_lock;
 		htable->bucket_unlock = bucket_unlock;
 	}
 	/* initialize vector */
-	htable->ht_ops = hops;
 	rc = vec_init(&htable->ht_vector, DYNHASH_SIPBITS);
 	if (rc != 0) {
 		D_GOTO(out2, rc);
@@ -345,15 +752,16 @@ dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
 		htable->ht_vector.data[idx] = (void*)bucket;
 	}
 	htable->ht_magic = DYNHASH_MAGIC;
+	D_GOTO(out, rc);
 
 out3:
-	if (!(feats & DYN_HASH_FT_NOLOCK)) {
-		if (feats & DYN_HASH_FT_MUTEX) {
-			rc = D_MUTEX_DESTROY(&htable->ht_lock.mutex);
-		} else if (feats & DYN_HASH_FT_RWLOCK) {
-			rc = D_RWLOCK_DESTROY(&htable->ht_lock.rwlock);
+	if (!(feats & D_HASH_FT_NOLOCK)) {
+		if (feats & D_HASH_FT_MUTEX) {
+			D_MUTEX_DESTROY(&gtable->ht_lock.mutex);
+		} else if (feats & D_HASH_FT_RWLOCK) {
+			D_RWLOCK_DESTROY(&gtable->ht_lock.rwlock);
 		} else {
-			rc = D_SPIN_DESTROY(&htable->ht_lock.spin);
+			D_SPIN_DESTROY(&gtable->ht_lock.spin);
 		}
 	}
 out2:
@@ -368,7 +776,7 @@ out:
 }
 
 int
-dyn_hash_table_traverse(struct dyn_hash *htable, dyn_hash_traverse_cb_t cb,
+dyn_hash_table_traverse(struct d_hash_table *gtable, d_hash_traverse_cb_t cb,
 		void *arg)
 {
 	int 		rc = 0;
@@ -376,8 +784,11 @@ dyn_hash_table_traverse(struct dyn_hash *htable, dyn_hash_traverse_cb_t cb,
 	uint32_t        ix;
 	dh_bucket_t     *bucket;
 	dh_bucket_t     *prev = NULL;
+	struct dyn_hash *htable = gtable->dyn_hash;
 
 	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+
 	if (cb == NULL) {
 		D_ERROR("invalid parameter, NULL cb.\n");
 		D_GOTO(out, rc = -DER_INVAL);
@@ -403,97 +814,358 @@ out:
 }
 
 int
-dyn_hash_table_destroy(struct dyn_hash *htable, bool force)
+dyn_hash_table_destroy(struct d_hash_table *gtable, bool force)
 {
-	return 0;
+	int rc;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	rc = dyn_hash_table_destroy_inplace(gtable, force);
+	if ( rc == 0) {
+		D_FREE(gtable->dyn_hash);
+		D_FREE(gtable);
+	}
+	return rc;
 }
 
 int
-dyn_hash_table_destroy_inplace(struct dyn_hash *htable, bool force)
+dyn_hash_table_destroy_inplace(struct d_hash_table *gtable, bool force)
 {
-	return 0;
+	int		rc = 0;
+	uint32_t	idx;
+	uint32_t        ix;
+	dh_bucket_t     *bucket;
+	dh_bucket_t     *prev = NULL;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	if (!force && htable->ht_records != 0) {
+		D_DEBUG(DB_TRACE, "Warning, non-empty hash\n");
+		D_GOTO(out, rc = -DER_BUSY);
+	}
+	htable->ht_write_lock(htable);
+	for (idx = 0; idx < htable->ht_vector.counter; idx++) {
+		bucket = htable->ht_vector.data[idx];
+		if (bucket == prev) {
+			continue;
+		}
+		prev = bucket;
+		D_FREE(bucket);
+	}
+	if (htable->ht_bmutex != NULL) {
+		for(ix = 0;  ix < htable->ht_bucket_locks; ix++) {
+			D_MUTEX_DESTROY(&htable->ht_bmutex[ix]);
+		}
+		D_FREE_PTR(htable->ht_bmutex);
+	}
+	vec_destroy(&htable->ht_vector);
+	htable->ht_rw_unlock(htable);
+
+	if (!(gtable->ht_feats & D_HASH_FT_NOLOCK)) {
+		if (gtable->ht_feats & D_HASH_FT_MUTEX) {
+			D_MUTEX_DESTROY(&gtable->ht_lock.mutex);
+		} else if (gtable->ht_feats & D_HASH_FT_RWLOCK) {
+			D_RWLOCK_DESTROY(&gtable->ht_lock.rwlock);
+		} else {
+			D_SPIN_DESTROY(&gtable->ht_lock.spin);
+		}
+	}
+
+	htable->ht_magic = 0;
+out:
+	return rc;
 }
 
 dh_item_t
-dyn_hash_rec_find(struct dyn_hash *htable, const void *key,
+dyn_hash_rec_find(struct d_hash_table *gtable, const void *key,
 		unsigned int ksize, uint64_t siphash)
 {
-	return NULL;
+	int		rc = 0;
+        dh_bucket_t	*bucket;
+        dh_item_t	item = NULL;
+        bool		sip_update = false;
+        uint32_t        index;
+        struct dyn_hash *htable = gtable->dyn_hash;
+
+        D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+        D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	if (siphash == 0) {
+		siphash = gen_siphash(key, ksize);
+		sip_update = true;
+	}
+	htable->ht_read_lock(htable);
+	index = (uint32_t) (siphash >> htable->ht_shift);
+	bucket = htable->ht_vector.data[index];
+	htable->bucket_lock(htable, bucket);
+	htable->ht_rw_unlock(htable);
+
+	rc = find_exact_match(htable, bucket, siphash, key, ksize);
+	if (rc >= 0) {
+		item = bucket->field[rc].record;
+	}
+	htable->bucket_unlock(htable, bucket);
+	
+	if (item != NULL) {
+		htable->ht_ops.hop_rec_addref(gtable, item);
+		if(sip_update) {
+			htable->ht_ops.hop_siphash_set(item, siphash);
+		}
+	}
+	return item;
 }
 
 dh_item_t
-dyn_hash_rec_find_insert(struct dyn_hash *htable, const void *key,
+dyn_hash_rec_find_insert(struct d_hash_table *gtable, const void *key,
 		unsigned int ksize, dh_item_t item, uint64_t siphash)
 {
-	return NULL;
+	int		rc = 0;
+	bool    	set_siphash = false;
+	dh_item_t 	tmp = item;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	if (siphash == 0) {
+		siphash = gen_siphash(key, ksize);
+		set_siphash = true;
+	}
+	rc = do_insert(htable, key, ksize, &tmp, siphash,
+		       DH_LOOKUP_INSERT);
+	if( rc == 0 && set_siphash ) {
+		htable->ht_ops.hop_siphash_set(tmp, siphash);
+	}
+	return tmp;
 }
 
 int
-dyn_hash_rec_insert(struct dyn_hash *htable, const void *key,
-		unsigned int ksize, dh_item_t item, uint64_t siphash, bool exclusive)
+dyn_hash_rec_insert(struct d_hash_table *gtable, const void *key,
+		unsigned int ksize, dh_item_t item, bool exclusive)
 {
-	return 0;
-}
+	int		rc = 0;
+	uint64_t 	siphash;
+	struct dyn_hash *htable = gtable->dyn_hash;
 
-int
-dyn_hash_rec_insert_anonym(struct dyn_hash *htable, dh_item_t item)
-{
-	return 0;
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+
+	siphash = gen_siphash(key, ksize);
+	do {
+		rc = do_insert(htable, key, ksize, &item,
+		       siphash, exclusive ? DH_INSERT_EXCLUSIVE :
+				       DH_INSERT_INCLUSIVE);
+	} while( rc == -DER_AGAIN);
+
+	if( rc == 0 ) {
+		htable->ht_ops.hop_siphash_set(item, siphash);
+	}
+	return rc;
 }
 
 bool
-dyn_hash_rec_delete(struct dyn_hash *htable, const void *key,
+dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 		unsigned int ksize, uint64_t siphash)
 {
-	return true;
+	bool		rc = true;
+	uint32_t	index;
+	int		bucket_idx;
+	dh_item_t	item;
+	dh_bucket_t	*bucket;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+
+	if (siphash == 0) {
+		siphash = gen_siphash(key, ksize);
+	}
+	index = (uint32_t)(siphash >> htable->ht_shift);
+	htable->ht_write_lock(htable);
+	bucket = htable->ht_vector.data[index];
+	if (bucket->counter == 0) {
+		htable->ht_rw_unlock(htable);
+		D_GOTO(out, rc = false);
+	}
+	htable->bucket_lock(htable, bucket);
+	bucket_idx = find_exact_match(htable, bucket, siphash,
+				      key, ksize);
+	if(bucket_idx < 0) {
+		htable->bucket_unlock(htable, bucket);
+		htable->ht_rw_unlock(htable);
+		D_GOTO(out, rc = false);
+	}
+	item = bucket->field[bucket_idx].record;
+	if (bucket->counter == 1 &&
+		gtable->ht_feats & D_HASH_FT_SHRINK) {
+
+		bucket->counter = 0;
+		htable->ht_records--;
+		shrink_vector(htable, bucket, index);
+		htable->bucket_unlock(htable, bucket);
+		htable->ht_rw_unlock(htable);
+		D_FREE (bucket);
+
+	} else {
+		htable->ht_records--;
+		htable->ht_rw_unlock(htable);
+	        while (bucket_idx < (bucket->counter - 1)) {
+	            bucket->field[bucket_idx] = bucket->field[bucket_idx + 1];
+	            bucket_idx++;
+	        }
+	        bucket->counter--;
+	        htable->bucket_unlock(htable, bucket);
+	}
+out:
+	if (rc && htable->ht_ops.hop_rec_decref(gtable, item)) {
+		htable->ht_ops.hop_rec_free(gtable, item);
+	}
+	return rc;
 }
 
 bool
-dyn_hash_rec_delete_at(struct dyn_hash *htable, dh_item_t item)
+dyn_hash_rec_delete_at(struct d_hash_table *gtable, dh_item_t item)
 {
-	return true;
+	bool 		rc = true;
+	void		*key;
+	unsigned int	ksize;
+	uint64_t	siphash;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+
+	if (!htable->ht_ops.hop_key_get(item, &key, &ksize)) {
+			D_ERROR("Get key function failed\n");
+			D_GOTO(out, rc = false);
+	}
+	siphash = gen_siphash(key, ksize);
+	rc = dyn_hash_rec_delete(gtable, (const void*)key, ksize,
+				 siphash);
+out:
+	return rc;
 }
 
 bool
-dyn_hash_rec_evict(struct dyn_hash *htable, const void *key,
+dyn_hash_rec_evict(struct d_hash_table *htable, const void *key,
 		unsigned int ksize)
 {
-	return true;
+	return false;
 }
 
 bool
-dyn_hash_rec_evict_at(struct dyn_hash *htable, dh_item_t item,
+dyn_hash_rec_evict_at(struct d_hash_table *htable, dh_item_t item,
 		uint64_t siphash)
 {
-	return true;
+	return false;
 }
 
 void
-dyn_hash_rec_addref(struct dyn_hash *htable, dh_item_t item)
+dyn_hash_rec_addref(struct d_hash_table *gtable, dh_item_t item)
 {
+	struct dyn_hash *htable = gtable->dyn_hash;
 
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	htable->ht_write_lock(htable);
+	htable->ht_ops.hop_rec_addref(gtable, item);
+	htable->ht_rw_unlock(htable);
 }
 
 void
-dyn_hash_rec_decref(struct dyn_hash *htable, dh_item_t item)
+dyn_hash_rec_decref(struct d_hash_table *gtable, dh_item_t item)
 {
+	struct dyn_hash *htable = gtable->dyn_hash;
 
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	htable->ht_write_lock(htable);
+	if (htable->ht_ops.hop_rec_decref(gtable, item)) {
+		htable->ht_ops.hop_rec_free(gtable, item);
+	}
+	htable->ht_rw_unlock(htable);
 }
 
 int
-dyn_hash_rec_ndecref(struct dyn_hash *htable, int count, dh_item_t item)
+dyn_hash_rec_ndecref(struct d_hash_table *gtable, int count, dh_item_t item)
 {
-	return 0;
+	bool		zombie = false;
+	int		rc = 0;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+	htable->ht_write_lock(htable);
+	if(htable->ht_ops.hop_rec_ndecref != def_hop_ndecref) {
+		if (htable->ht_ops.hop_rec_ndecref(gtable, item, count)) {
+			htable->ht_ops.hop_rec_free(gtable, item);
+		}
+	} else {
+		/* TODO: it looks like over design!
+		 * If hop_rec_ndecref not specified
+		 * fixing caller configuration by default
+		 * might have unexpected side effect
+		 */
+		do {
+			zombie = htable->ht_ops.hop_rec_decref (gtable,
+				item);
+		} while (--count && !zombie);
+
+		if (count != 0) {
+			rc = -DER_INVAL;
+		}
+		if ( rc == 0 && zombie) {
+			htable->ht_ops.hop_rec_free(gtable, item);
+		}
+	}
+	htable->ht_rw_unlock(htable);
+	return rc;
 }
 
 dh_item_t
-dyn_hash_rec_first(struct dyn_hash *htable)
+dyn_hash_rec_first(struct d_hash_table *gtable)
 {
-	return NULL;
+	dh_bucket_t	*bucket;
+	dh_bucket_t	*prev_bucket = 0;
+	dh_item_t	item = NULL;
+	uint32_t	idx;
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+
+	htable->ht_read_lock(htable);
+	for ( idx = 0; idx < htable->ht_vector.counter; idx++) {
+		bucket = htable->ht_vector.data[idx];
+		if(bucket == prev_bucket) {
+			continue;
+		}
+		prev_bucket = bucket;
+		if(bucket->counter != 0) {
+			item = bucket->field[0].record;
+			break;
+		}
+	}
+	htable->ht_rw_unlock(htable);
+	return item;
 }
 
 void
-dyn_hash_table_debug(struct dyn_hash *htable)
+dyn_hash_table_debug(struct d_hash_table *gtable)
 {
+	struct dyn_hash *htable = gtable->dyn_hash;
+
+	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
+	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
+#if DYN_HASH_DEBUG
+	if (htable->ht_feats & DYN_HASH_FT_SHRINK) {
+		D_DEBUG(DB_TRACE, "max nr: %u, cur nr: %u, vector_spits: %u"
+			"split_time(usec) %u\n",
+			htable->ht_nr_max, htable->ht_records, htable->ht_dep_max,
+			htable->ht_vsplit_delay);
+	} else {
+		D_DEBUG(DB_TRACE, "max nr: %u, cur nr: %u\n",
+			htable->ht_nr_max, htable->ht_records);
+
+	}
+#endif
 
 }

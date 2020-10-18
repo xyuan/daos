@@ -43,6 +43,7 @@
 #define D_HASH_DEBUG	0
 
 struct d_hash_table;
+struct dyn_hash;
 
 #if defined(__cplusplus)
 extern "C" {
@@ -163,6 +164,29 @@ typedef struct {
 	 * \param[in]	link	The record being freed.
 	 */
 	void	 (*hop_rec_free)(struct d_hash_table *htable, d_list_t *link);
+
+        /**
+ 	* Get \p key from the record 
+ 	* This member function is optional, and used 
+ 	* in dynamic hash only, but if not specified
+ 	* hash_rec_delete_at() for dynamic hash returns error
+ 	* \param[in]   item to extract key from
+ 	* \param[out]  pointer to store key pointer
+ 	* \param[out]  pointer to store key size
+ 	* \retval      true    success.
+ 	* \retval      false   invalid item
+ 	*/
+	bool (*hop_key_get)(void *link, void **key, unsigned int *ksize);
+
+	/**
+ 	* Optional (used in dynamic hash only), store SIP hash associated with the item
+ 	* This member function avoids SIP hash calculation for each
+ 	* insert / lookup call
+ 	*
+ 	* \param[in] item item to store SIP hash
+ 	* \param[in] SIP hash
+ 	*/
+	void (*hop_siphash_set)(void *link, uint64_t siphash);
 } d_hash_table_ops_t;
 
 enum d_hash_feats {
@@ -216,6 +240,20 @@ enum d_hash_feats {
 	D_HASH_FT_LRU		= (1 << 4),
 
 	/**
+ 	* Used in dynamic hash only
+ 	* Srink buckets and update vector during delete
+ 	* If set all empty buckets getting deallocated
+ 	* followed by vector update
+ 	* This optimizes memory usage but increases record
+ 	* remove time
+ 	*/
+	D_HASH_FT_SHRINK	= (1 << 5),
+	/**
+	* Marks hash table as a dynamically growing
+	*/
+	D_HASH_FT_DYNAMIC 	= (1 << 6),
+
+	/**
 	 * Use Global Table Lock instead of per bucket locking.
 	 * TODO: should be removed when all will use per bucket locking.
 	 */
@@ -258,6 +296,7 @@ struct d_hash_table {
 	struct d_hash_bucket	*ht_buckets;
 	/** different type of locks based on ht_feats */
 	union d_hash_lock	*ht_locks;
+	struct dyn_hash		*dyn_hash;
 };
 
 /**
@@ -358,7 +397,7 @@ int  d_hash_table_destroy_inplace(struct d_hash_table *htable, bool force);
  * \return			found chain link
  */
 d_list_t *d_hash_rec_find(struct d_hash_table *htable, const void *key,
-			  unsigned int ksize);
+			unsigned int ksize);
 
 /**
  * Lookup \p key in the hash table, if there is a matched record, it should be

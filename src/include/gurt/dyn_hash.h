@@ -36,17 +36,14 @@
 #include <gurt/list.h>
 #include <gurt/types.h>
 
-/**
- * Hash table keeps and prints extra debugging information
- */
-#define DYN_HASH_DEBUG	0
-
-struct dyn_hash;
-typedef void *dh_item_t;
-
 #if defined(__cplusplus)
 extern "C" {
 #endif
+
+typedef void* dh_item_t;
+struct d_hash_table;
+
+#define DYN_HASH_DEBUG 0
 
 /** @addtogroup GURT
  * @{
@@ -54,162 +51,7 @@ extern "C" {
 /******************************************************************************
  * Generic Hash Table APIs / data structures
  ******************************************************************************/
-
-typedef struct {
-	/**
-	 * Compare \p key with the  record
-	 * This member function is mandatory.
-	 *
-	 * \param[in]	key	Key to compare
-	 * \param[in]	ksize	Size of the key
-	 *
-	 * \retval	0	Success
-	 * \retval	< 0	Invalid item
-	 *
-	 * \retval	true	The key of the record equals to \p key.
-	 * \retval	false	No match
-	 */
-	bool (*hop_key_cmp)(dh_item_t item, const void *key, unsigned int ksize);
-	/**
-	 * Optional, store SIP hash associated with the item
-	 * This member function avoid SIP hash caclulation for each
-	 * insert / lookup call
-	 * 
-	 * \param[in] item item to store SIP hash
-	 * \param[in] SIP hash
-	 */
-	void (*hop_siphash_set)(dh_item_t item, uint64_t siphash);
-	/**
-	 * Optional, increase refcount on the record
-	 * If this function is provided, it will be called for successfully
-	 * inserted record.
-	 *
-	 * \param[in]	htable	hash table
-	 * \param[in]	item	The record being referenced.
-	 */
-	void (*hop_rec_addref)(struct dyn_hash *htable, dh_item_t *item);
-
-	/**
-	 * Optional, release refcount on the record \p link
-	 *
-	 * If this function is provided, it is called while deleting a record
-	 * from the hash table.
-	 *
-	 * If hop_rec_free() is provided, this function can return true when
-	 * the refcount reaches zero, in this case, hop_free() will be called.
-	 * If the record should not be automatically freed by the hash table
-	 * despite of refcount, then this function should never return true.
-	 *
-	 * \param[in]	htable	hash table
-	 * \param[in]	item	The record being released.
-	 *
-	 * \retval	false	Do nothing
-	 * \retval	true	Only if refcount is zero and the hash item
-	 *			can be freed. If this function can return
-	 *			true, then hop_rec_free() should be defined.
-	 */
-	bool (*hop_rec_decref)(struct dyn_hash *htable, dh_item_t item);
-
-	/**
-	 * Optional, release multiple refcount on the record \p link
-	 *
-	 * This function expands on hop_rec_decref() so the notes from that
-	 * function apply here.  If hop_rec_decref() is not provided then
-	 * hop_rec_ndecref() shouldn't be either.
-	 *
-	 * \param[in]	htable	hash table
-	 * \param[in]	link	The link being released.
-	 * \param[in]	count	The number of refcounts to be dropped.
-	 *
-	 * \retval	0	Do nothing
-	 * \retval	1	Only if refcount is zero and the hash item
-	 *			can be freed. If this function can return
-	 *			true, then hop_rec_free() should be defined.
-	 *		negative value on error.
-	 */
-	int (*hop_rec_ndecref)(struct dyn_hash *htable, dh_item_t item, int count);
-
-	/**
-	 * Optional, free the record
-	 * It is called if hop_decref() returns zero.
-	 *
-	 * \param[in]	htable	hash table
-	 * \param[in]	link	The record being freed.
-	 */
-	void (*hop_rec_free)(struct dyn_hash *htable, d_list_t *link);
-
-} dyn_hash_ops_t;
-
-enum dyn_hash_feats {
-	/**
-	 * By default, the hash table is protected by pthread_spinlock_t.
-	 */
-
-	/**
-	 * The hash table has no lock, it means the hash table is protected
-	 * by external lock, or only accessed by a single thread.
-	 */
-	DYN_HASH_FT_NOLOCK = (1 << 0),
-
-	/**
-	 * The hash table is protected by pthread_mutex_t.
-	 */
-	DYN_HASH_FT_MUTEX = (1 << 1),
-
-	/**
-	 * It is a read-mostly hash table, so it is protected by RW lock.
-	 *
-	 * Note: If caller sets this flag and also provides hop_addref/decref,
-	 * then he should guarantee refcount changes are atomic or protected
-	 * within hop_addref/decref, because RW lock can't protect refcount.
-	 */
-	DYN_HASH_FT_RWLOCK = (1 << 2),
-
-	/**
-	 * If the EPHEMERAL bit is zero:
-	 * - The hash table will take and release references using the
-	 *   user-provided hop_rec_addref and hop_rec_decref functions as
-	 *   entries are added to and deleted from the hash table.
-	 * - Decrementing the last reference on an item without previously
-	 *   deleting it will cause an ASSERT - it will not be free'd
-	 *
-	 * If the EPHEMERAL bit is set:
-	 * - The hash table will not call automatically call the addref or
-	 *   decref functions when entries are added/removed
-	 * - When decref is called and the reference count reaches zero, the
-	 *   record will be deleted automatically from the table and free'd
-	 *
-	 * Note that if addref/decref are not provided this bit has no effect
-	 */
-	DYN_HASH_FT_EPHEMERAL = (1 << 3),
-
-	/**
-	 * Use Global Table Lock only instead of combination with bucket locking.
-	 * Might be usefull for caching:
-	 *  write lock
-	 *  lookup
-	 *  allocate if not found
-	 *  insert in hash table
-	 *  write unlock;
-	 *  return found or allocated value
-	 */
-	DYN_HASH_FT_GLOCK = (1 << 15),
-	
-	/** Srink buckets and update vector during delete
-	 *  If set all empty buckets getting deallocated
-	 *  followed by vector update
-	 *  This optimizes memory usage but increases record
-	 *  remove time
-	 */
-	DYN_HASH_FT_SHRING = ( 1 << 14),
-};
-
-union dyn_hash_lock {
-	pthread_spinlock_t spin;
-	pthread_mutex_t mutex;
-	pthread_rwlock_t rwlock;
-};
-
+struct dh_bucket; 
 typedef struct dh_vector {
 	/** actual vector size (bytes) */
 	size_t 		size;
@@ -220,43 +62,43 @@ typedef struct dh_vector {
 } dh_vector_t;
 
 struct dyn_hash {
-	/** feature bits */
-	uint32_t 	ht_feats;
 	/** SIP hash right shift for vector index calculation */
-	uint8_t 	ht_shift;
+	uint8_t 		ht_shift;
 	/** total number of hash records */
-	uint32_t 	ht_records;
+	uint32_t 		ht_records;
 	/** vector (bucket pointer) */
-	dh_vector_t 	ht_vector;
-	/** different type of locks based on ht_feats */
-	union dyn_hash_lock	ht_lock;
+	dh_vector_t 		ht_vector;
 	/** customized member functions */
-	dyn_hash_ops_t	*ht_ops;
+	d_hash_table_ops_t	ht_ops;
 	/** virtual internal global write lock function */
-	void 		(*ht_write_lock)(struct dyn_hash *htable);
+	void 			(*ht_write_lock)(struct dyn_hash *htable);
 	/** virtual internal global read lock function */
-	void            (*ht_read_lock)(struct dyn_hash *htable);
+	void            	(*ht_read_lock)(struct dyn_hash *htable);
 	/** virtual internal global unlock function */
-	void            (*ht_rw_unlock)(struct dyn_hash *htable);
+	void            	(*ht_rw_unlock)(struct dyn_hash *htable);
 	/** virtual internal bucket lock function */
-	void		(*bucket_lock)(struct dyn_hash *htable, uint32_t lock_index);
+	void			(*bucket_lock)(struct dyn_hash *htable, struct dh_bucket *bucket);
 	/** virtual internal bucket unlock function */
-	void		(*bucket_unlock)(struct dyn_hash *htable, uint32_t lock_index);
+	void			(*bucket_unlock)(struct dyn_hash *htable, struct dh_bucket *bucket);
 	/** hash table magic signature */
-	uint32_t        ht_magic;
+	uint32_t        	ht_magic;
 	/** number of bucket locks in the array */
-	uint32_t	ht_bucket_locks;
+	uint32_t		ht_bucket_locks;
 	/** bucket locks array */
-	pthread_mutex_t	*ht_bmutex;
-#if D_HASH_DEBUG
+	pthread_mutex_t		*ht_bmutex;
+	/** basic hash table reference */
+	struct d_hash_table     *gtable;
+#if DYN_HASH_DEBUG
 	/** number of vector splits 
 	 * (updated only if DYN_HASH_FT_SHRING not set)
 	 */
-	uint32_t	ht_vsplits;
+	uint32_t		ht_vsplits;
 	/** accumulated vector spit time (usec) 
 	 * (updated only if DYN_HASH_FT_SHRING not set)
 	 */
-	uint32_t        ht_vsplit_delay;
+	uint32_t        	ht_vsplit_delay;
+	/** maximum number of hash records */
+	uint32_t		ht_nr_max;
 #endif
 };
 
@@ -274,8 +116,8 @@ struct dyn_hash {
  *
  * \return			0 on success, negative value on error
  */
-int dyn_hash_create(uint32_t feats, uint32_t bits,
-		dyn_hash_ops_t *hops, struct dyn_hash **htable_pp);
+int dyn_hash_create(uint32_t feats, uint32_t bits, void *priv,
+		    d_hash_table_ops_t *hops, struct d_hash_table **htable_pp);
 
 /**
  * Initialize an inplace hash table.
@@ -292,10 +134,8 @@ int dyn_hash_create(uint32_t feats, uint32_t bits,
  *
  * \return			0 on success, negative value on error
  */
-int dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits,
-		dyn_hash_ops_t *hops, struct dyn_hash *htable);
-
-typedef int (*dyn_hash_traverse_cb_t)(dh_item_t item, void *arg);
+int dyn_hash_table_create_inplace(uint32_t feats, uint32_t bits, void *priv,
+				  d_hash_table_ops_t *hops, struct d_hash_table *htable);
 
 /**
  * Traverse a hash table, call the traverse callback function on every item.
@@ -309,8 +149,8 @@ typedef int (*dyn_hash_traverse_cb_t)(dh_item_t item, void *arg);
  *
  * \return			zero on success, negative value if error.
  */
-int dyn_hash_table_traverse(struct dyn_hash *htable, dyn_hash_traverse_cb_t cb,
-		void *arg);
+int dyn_hash_table_traverse(struct d_hash_table *htable, d_hash_traverse_cb_t cb,
+			    void *arg);
 
 /**
  * Destroy a hash table.
@@ -325,7 +165,7 @@ int dyn_hash_table_traverse(struct dyn_hash *htable, dyn_hash_traverse_cb_t cb,
  *
  * \return			zero on success, negative value if error.
  */
-int dyn_hash_table_destroy(struct dyn_hash *htable, bool force);
+int dyn_hash_table_destroy(struct d_hash_table *htable, bool force);
 
 /**
  * Finalise a hash table, reset all struct members.
@@ -342,10 +182,10 @@ int dyn_hash_table_destroy(struct dyn_hash *htable, bool force);
  *
  * \return			zero on success, negative value if error.
  */
-int dyn_hash_table_destroy_inplace(struct dyn_hash *htable, bool force);
+int dyn_hash_table_destroy_inplace(struct d_hash_table *htable, bool force);
 
 /**
- * lookup \p key in the hash table, the found chain link is returned on
+ * lookup \p key in the hash table, the found item is returned on
  * success.
  *
  * \param[in] htable		Pointer to the hash table
@@ -355,7 +195,7 @@ int dyn_hash_table_destroy_inplace(struct dyn_hash *htable, bool force);
  *
  * \return			found item
  */
-dh_item_t dyn_hash_rec_find(struct dyn_hash *htable, const void *key,
+dh_item_t dyn_hash_rec_find(struct d_hash_table *htable, const void *key,
 		unsigned int ksize, uint64_t siphash);
 
 /**
@@ -371,7 +211,7 @@ dh_item_t dyn_hash_rec_find(struct dyn_hash *htable, const void *key,
  *
  * \return			matched record
  */
-dh_item_t dyn_hash_rec_find_insert(struct dyn_hash *htable, const void *key,
+dh_item_t dyn_hash_rec_find_insert(struct d_hash_table *htable, const void *key,
 		unsigned int ksize, dh_item_t item, uint64_t siphash);
 
 /**
@@ -386,25 +226,12 @@ dh_item_t dyn_hash_rec_find_insert(struct dyn_hash *htable, const void *key,
  * \param[in] key		The key to be inserted
  * \param[in] ksize		Size of the key
  * \param[in] item		The item being inserted
- * \param[in] siphash   Previously generated SIP hash or 0 if unknown
- * \param[in] exclusive		The key has to be unique if it is true.
+  * \param[in] exclusive		The key has to be unique if it is true.
  *
  * \return			0 on success, negative value on error
  */
-int dyn_hash_rec_insert(struct dyn_hash *htable, const void *key,
-		unsigned int ksize, dh_item_t item, uint64_t siphash, bool exclusive);
-
-/**
- * Insert an anonymous record (w/o key) into the hash table.
- * This function calls hop_key_init() to generate a key for the new link
- * under the protection of the hash table lock.
- *
- * \param[in] htable		Pointer to the hash table
- * \param[in] item		The link chain of the hash record
-  *
- * \return			0 on success, negative value on error
- */
-int dyn_hash_rec_insert_anonym(struct dyn_hash *htable, dh_item_t item);
+int dyn_hash_rec_insert(struct d_hash_table *htable, const void *key,
+		unsigned int ksize, dh_item_t item,  bool exclusive);
 
 /**
  * Delete the record identified by \p key from the hash table.
@@ -412,12 +239,12 @@ int dyn_hash_rec_insert_anonym(struct dyn_hash *htable, dh_item_t item);
  * \param[in] htable		Pointer to the hash table
  * \param[in] key		The key of the record being deleted
  * \param[in] ksize		Size of the key
- * \param[in] siphash   Previously generated SIP hash or 0 if unknown
+ * \param[in] siphash  		Previously generated SIP hash or 0 if unknown
  *
  * \retval			true	Item with \p key has been deleted
  * \retval			false	Can't find the record by \p key
  */
-bool dyn_hash_rec_delete(struct dyn_hash *htable, const void *key,
+bool dyn_hash_rec_delete(struct d_hash_table *htable, const void *key,
 		unsigned int ksize, uint64_t siphash);
 
 /**
@@ -432,7 +259,7 @@ bool dyn_hash_rec_delete(struct dyn_hash *htable, const void *key,
  * \retval			false	The record has already been unlinked
  *					from the hash table
  */
-bool dyn_hash_rec_delete_at(struct dyn_hash *htable, dh_item_t item);
+bool dyn_hash_rec_delete_at(struct d_hash_table *htable, dh_item_t item);
 
 /**
  * Evict the record identified by \p key from the hash table.
@@ -444,7 +271,7 @@ bool dyn_hash_rec_delete_at(struct dyn_hash *htable, dh_item_t item);
  * \retval			true	Item with \p key has been evicted
  * \retval			false	Can't find the record by \p key
  */
-bool dyn_hash_rec_evict(struct dyn_hash *htable, const void *key,
+bool dyn_hash_rec_evict(struct d_hash_table *htable, const void *key,
 		unsigned int ksize);
 
 /**
@@ -457,7 +284,7 @@ bool dyn_hash_rec_evict(struct dyn_hash *htable, const void *key,
  * \retval			true	Item has been evicted
  * \retval			false	Not LRU feature
  */
-bool dyn_hash_rec_evict_at(struct dyn_hash *htable, dh_item_t item, 
+bool dyn_hash_rec_evict_at(struct d_hash_table *htable, dh_item_t item,
 		uint64_t siphash);
 
 /**
@@ -466,7 +293,7 @@ bool dyn_hash_rec_evict_at(struct dyn_hash *htable, dh_item_t item,
  * \param[in] htable		Pointer to the hash table
  * \param[in] item		The record
  */
-void dyn_hash_rec_addref(struct dyn_hash *htable, dh_item_t item);
+void dyn_hash_rec_addref(struct d_hash_table *htable, dh_item_t item);
 
 /**
  * Decrease the refcount of the record.
@@ -476,7 +303,7 @@ void dyn_hash_rec_addref(struct dyn_hash *htable, dh_item_t item);
  * \param[in] htable		Pointer to the hash table
  * \param[in] item		The record
  */
-void dyn_hash_rec_decref(struct dyn_hash *htable, dh_item_t item);
+void dyn_hash_rec_decref(struct d_hash_table *htable, dh_item_t item);
 
 /**
  * Decrease the refcount of the record by count.
@@ -489,20 +316,8 @@ void dyn_hash_rec_decref(struct dyn_hash *htable, dh_item_t item);
  * \retval			0		Success
  * \retval			-DER_INVAL	Not enough references were held.
  */
-int dyn_hash_rec_ndecref(struct dyn_hash *htable, int count, dh_item_t item);
+int dyn_hash_rec_ndecref(struct d_hash_table *htable, int count, dh_item_t item);
 
-#if 0
-/* can't be implemented in dyn_hash (no lists)
- *
- * Check if the link chain has already been unlinked from the hash table.
- *
- * \param[in] link		The link chain of the record
- *
- * \retval			true	Yes
- * \retval			false	No
- */
-bool d_hash_rec_unlinked(d_list_t *link);
-#endif
 
 /**
  * Return the first entry in a hash table.
@@ -516,122 +331,15 @@ bool d_hash_rec_unlinked(d_list_t *link);
  * \retval			item	Pointer to first element in hash table
  * \retval			NULL	Hash table is empty or error occurred
  */
-dh_item_t dyn_hash_rec_first(struct dyn_hash *htable);
+dh_item_t dyn_hash_rec_first(struct d_hash_table *htable);
 
 /**
  * If debugging is enabled, prints stats about the hash table
  *
  * \param[in] htable		Pointer to the hash table
  */
-void dyn_hash_table_debug(struct dyn_hash *htable);
+void dyn_hash_table_debug(struct d_hash_table *htable);
 
-#if 0 /* Skip it for now */
-/******************************************************************************
- * DAOS Handle Hash Table Wrapper
- *
- * Note: These functions are not thread-safe because reference counting
- * operations are not internally lock-protected. The user must add their own
- * locking.
- *
- ******************************************************************************/
-
-#define D_HHASH_BITS		16
-#define D_HTYPE_BITS		4
-#define D_HTYPE_MASK		((1ULL << D_HTYPE_BITS) - 1)
-
-/**
- * The handle type, uses the least significant 4-bits in the 64-bits hhash key.
- * The bit 0 is only used for D_HYTPE_PTR (pointer type), all other types MUST
- * set bit 0 to 1.
- */
-enum {
-	D_HTYPE_PTR = 0, /**< pointer type handle */
-/* Must enlarge D_HTYPE_BITS to add more types */
-};
-
-struct d_hlink;
-struct d_hlink_ops {
-	/** free callback */
-	void (*hop_free)(struct d_hlink *hlink);
-};
-
-struct d_rlink {
-	d_list_t rl_link;
-	uint32_t rl_ref;
-	uint32_t rl_initialized :1;
-};
-
-struct d_hlink {
-	struct d_rlink hl_link;
-	uint64_t hl_key;
-	struct d_hlink_ops *hl_ops;
-};
-
-struct d_hhash;
-/**< internal definition */
-
-int d_hhash_create(uint32_t feats, uint32_t bits, struct d_hhash **hhash);
-void d_hhash_destroy(struct d_hhash *hhash);
-void d_hhash_hlink_init(struct d_hlink *hlink, struct d_hlink_ops *hl_ops);
-/**
- * Insert to handle hash table.
- * If \a type is D_HTYPE_PTR, user MUST ensure the bit 0 of \a hlink pointer is
- * zero. Assuming zero value of bit 0 of the pointer is reasonable portable. It
- * is with undefined result if bit 0 of \a hlink pointer is 1 for D_HTYPE_PTR
- * type.
- */
-void d_hhash_link_insert(struct d_hhash *hhash, struct d_hlink *hlink,
-		int type);
-struct d_hlink* d_hhash_link_lookup(struct d_hhash *hhash, uint64_t key);
-void d_hhash_link_getref(struct d_hhash *hhash, struct d_hlink *hlink);
-void d_hhash_link_putref(struct d_hhash *hhash, struct d_hlink *hlink);
-bool d_hhash_link_delete(struct d_hhash *hhash, struct d_hlink *hlink);
-bool d_hhash_link_empty(struct d_hlink *hlink);
-void d_hhash_link_key(struct d_hlink *hlink, uint64_t *key);
-int d_hhash_key_type(uint64_t key);
-bool d_hhash_key_isptr(uint64_t key);
-int d_hhash_set_ptrtype(struct d_hhash *hhash);
-bool d_hhash_is_ptrtype(struct d_hhash *hhash);
-
-/******************************************************************************
- * UUID Hash Table Wrapper
- * Key: UUID
- * Value: generic pointer
- *
- * Note: These functions are not thread-safe because reference counting
- * operations are not internally lock-protected. The user must add their own
- * locking.
- *
- ******************************************************************************/
-
-struct d_ulink;
-struct d_ulink_ops {
-	/** free callback */
-	void (*uop_free)(struct d_ulink *ulink);
-	/** optional compare callback -- for any supplement comparison */
-	bool (*uop_cmp)(struct d_ulink *ulink, void *cmp_args);
-};
-
-struct d_ulink {
-	struct d_rlink ul_link;
-	struct d_uuid ul_uuid;
-	struct d_ulink_ops *ul_ops;
-};
-
-int d_uhash_create(uint32_t feats, uint32_t bits, struct dyn_hash **htable);
-void d_uhash_destroy(struct dyn_hash *htable);
-void d_uhash_ulink_init(struct d_ulink *ulink, struct d_ulink_ops *ul_ops);
-bool d_uhash_link_empty(struct d_ulink *ulink);
-bool d_uhash_link_last_ref(struct d_ulink *ulink);
-void d_uhash_link_addref(struct dyn_hash *htable, struct d_ulink *ulink);
-void d_uhash_link_putref(struct dyn_hash *htable, struct d_ulink *ulink);
-void d_uhash_link_delete(struct dyn_hash *htable, struct d_ulink *ulink);
-int d_uhash_link_insert(struct dyn_hash *htable, struct d_uuid *key,
-		void *cmp_args, struct d_ulink *ulink);
-struct d_ulink* d_uhash_link_lookup(struct dyn_hash *htable, struct d_uuid *key,
-		void *cmp_args);
-
-#endif /* Skip it for now */
 #if defined(__cplusplus)
 }
 #endif

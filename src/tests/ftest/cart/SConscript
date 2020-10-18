@@ -43,6 +43,7 @@ SWIM_TESTS = ['test_swim.c', 'test_swim_net.c']
 HLC_TESTS = ['test_hlc_net.c']
 TEST_GROUP_NP_TESTS = ['test_group_np_srv.c', 'test_group_np_cli.c',
                        'no_pmix_group_version.c']
+TEST_DYN_HASH = ['dyn_hash_test.c']
 
 def scons():
     """scons function"""
@@ -78,6 +79,11 @@ def scons():
         tenv.Install(tests_dir, target)
 
     for test in TEST_GROUP_NP_TESTS:
+        target = daos_build.test(tenv, test, install_off='../../../../')
+        tenv.Requires(target, [cart_lib, gurt_lib])
+        tenv.Install(tests_dir, target)
+
+    for test in TEST_DYN_HASH:
         target = daos_build.test(tenv, test, install_off='../../../../')
         tenv.Requires(target, [cart_lib, gurt_lib])
         tenv.Install(tests_dir, target)
