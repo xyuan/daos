@@ -971,6 +971,7 @@ dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 	dh_item_t	item;
 	dh_bucket_t	*bucket;
 	struct dyn_hash *htable = gtable->dyn_hash;
+	bool		dont_free_bucked = false;
 
 	D_ASSERT(gtable->ht_feats & D_HASH_FT_DYNAMIC);
 	D_ASSERT(htable->ht_magic == DYNHASH_MAGIC);
@@ -999,10 +1000,15 @@ dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 
 		bucket->counter = 0;
 		htable->ht_records--;
+		if (htable->ht_records == 0) {
+			dont_free_bucked = true;
+		}
 		shrink_vector(htable, bucket, index);
 		htable->bucket_unlock(htable, bucket);
 		htable->ht_rw_unlock(htable);
-		D_FREE (bucket);
+		if (!dont_free_bucked) {
+			D_FREE (bucket);
+		}
 
 	} else {
 		htable->ht_records--;
