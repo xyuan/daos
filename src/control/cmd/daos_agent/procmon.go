@@ -74,7 +74,7 @@ type procInfo struct {
 }
 
 // NewProcInfo creates a new procInfo struct for use by procMon. The context passed
-// in is the top level context which a child context and cancelation routine is generated.
+// in is the top level context which a child context and cancellation routine is generated.
 // The response channel is the passed in by procMon to provide a unified interface
 // in procMon to handle responses.
 func NewProcInfo(ctx context.Context, Log logging.Logger, Pid int32, Response chan *procMonResponse) *procInfo {
@@ -131,7 +131,7 @@ func (p *procInfo) monitorProcess() {
 				return
 			}
 			if newIno != Ino {
-				p.response <- NewResponse(p.pid, fmt.Errorf("Pid %d teminated but another processes took its place %d:%d", p.pid, Ino, newIno))
+				p.response <- NewResponse(p.pid, fmt.Errorf("Pid %d terminated but another processes took its place %d:%d", p.pid, Ino, newIno))
 				return
 			}
 		}

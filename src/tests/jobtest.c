@@ -32,7 +32,7 @@ main(int argc, char **argv)
 
 	/** initialize the local DAOS stack */
 	rc = daos_init();
-	if(rc != 0) {
+	if (rc != 0) {
 		printf("daos_init failed with %d\n", rc);
 		exit(-1);
 	}
