@@ -2038,7 +2038,7 @@ main(int argc, char **argv)
 
 	rc =  cmocka_run_group_tests(tests, init_tests, fini_tests);
 	test_feats = D_HASH_FT_GLOCK | D_HASH_FT_DYNAMIC | D_HASH_FT_SHRINK;
-	const struct CMUnitTest	tests[] = {
+	const struct CMUnitTest	dyn_tests[] = {
 		cmocka_unit_test(test_gurt_hash_empty),
 		cmocka_unit_test(test_gurt_hash_insert_lookup_delete),
 		cmocka_unit_test(test_gurt_hash_decref),
@@ -2048,5 +2048,5 @@ main(int argc, char **argv)
 	};
 
 	d_register_alt_assert(mock_assert);
-	return cmocka_run_group_tests(tests, init_tests, fini_tests);
+	return cmocka_run_group_tests(dyn_tests, init_tests, fini_tests);
 }
