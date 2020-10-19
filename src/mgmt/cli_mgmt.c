@@ -553,13 +553,13 @@ cleanup:
  * Send an upcall to the agent to notify it of a clean process shutdown.
  */
 int
-dc_mgmt_disconnect()
+dc_mgmt_disconnect(void)
 {
 	struct drpc_alloc	 alloc = PROTO_ALLOCATOR_INIT(alloc);
 	struct drpc		*ctx;
 	Drpc__Call		*dreq;
 	Drpc__Response		*dresp;
-	int 			rc;
+	int			rc;
 
 	D_DEBUG(DB_MGMT, "disconnecting process for pid:%d\n", getpid());
 
@@ -573,7 +573,7 @@ dc_mgmt_disconnect()
 	}
 
 	rc = drpc_call_create(ctx, DRPC_MODULE_MGMT,
-				DRPC_METHOD_MGMT_DISCONNECT, &dreq);
+			      DRPC_METHOD_MGMT_DISCONNECT, &dreq);
 	if (rc != 0) {
 		goto out_ctx;
 	}
