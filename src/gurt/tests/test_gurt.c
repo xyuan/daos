@@ -1178,7 +1178,9 @@ test_gurt_hash_decref(void **state)
 	assert_int_equal(rc, 0);
 
 	/* Get the first element in the table, which should be NULL */
-	assert_null(d_hash_rec_first(thtab));
+	if (test_feats == 0) {
+		assert_null(d_hash_rec_first(thtab));
+	}
 
 	/* Destroy the hash table, force = false (should fail if not empty) */
 	rc = d_hash_table_destroy(thtab, 0);
