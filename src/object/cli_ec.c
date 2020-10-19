@@ -436,7 +436,7 @@ obj_ec_recx_scan(daos_iod_t *iod, d_sg_list_t *sgl,
 		goto out;
 	/* init the reassembled sgl and seg sorter with max possible sg_nr */
 	if (!punch) {
-		rc = daos_sgl_init(&reasb_req->orr_sgls[iod_idx],
+		rc = d_sgl_init(&reasb_req->orr_sgls[iod_idx],
 				   seg_nr + sgl->sg_nr);
 		if (rc)
 			goto out;
@@ -1512,7 +1512,7 @@ obj_ec_singv_req_reasb(daos_obj_id_t oid, daos_iod_t *iod, d_sg_list_t *sgl,
 
 		cell_bytes = obj_ec_singv_cell_bytes(iod->iod_size, oca);
 		/* reassemble the sgl */
-		rc = daos_sgl_init(r_sgl,
+		rc = d_sgl_init(r_sgl,
 				   sgl->sg_nr + obj_ec_parity_tgt_nr(oca));
 		if (rc)
 			goto out;
@@ -1527,7 +1527,7 @@ obj_ec_singv_req_reasb(daos_obj_id_t oid, daos_iod_t *iod, d_sg_list_t *sgl,
 		r_sgl->sg_nr = iov_nr + obj_ec_parity_tgt_nr(oca);
 	} else {
 		/* copy the sgl */
-		rc = daos_sgl_init(r_sgl, sgl->sg_nr);
+		rc = d_sgl_init(r_sgl, sgl->sg_nr);
 		if (rc)
 			goto out;
 		memcpy(r_sgl->sg_iovs, sgl->sg_iovs,
@@ -2124,11 +2124,11 @@ obj_ec_recov_task_fini(struct obj_reasb_req *reasb_req)
 	uint32_t			 i;
 
 	for (i = 0; i < fail_info->efi_nrecx_lists; i++)
-		daos_sgl_fini(&fail_info->efi_stripe_sgls[i], true);
+		d_sgl_fini(&fail_info->efi_stripe_sgls[i], true);
 	D_FREE(fail_info->efi_stripe_sgls);
 
 	for (i = 0; i < fail_info->efi_recov_ntasks; i++) {
-		daos_sgl_fini(&fail_info->efi_recov_tasks[i].ert_sgl, false);
+		d_sgl_fini(&fail_info->efi_recov_tasks[i].ert_sgl, false);
 		if (!daos_handle_is_inval(fail_info->efi_recov_tasks[i].ert_th))
 			dc_tx_local_close(fail_info->efi_recov_tasks[i].ert_th);
 	}
@@ -2190,7 +2190,7 @@ obj_ec_recov_task_init(struct obj_reasb_req *reasb_req, daos_obj_id_t oid,
 			buf_sz = stripe_total_sz * stripe_nr;
 		}
 		sgl = &fail_info->efi_stripe_sgls[i];
-		rc = daos_sgl_init(sgl, 1);
+		rc = d_sgl_init(sgl, 1);
 		if (rc)
 			goto out;
 		D_ALLOC(buf, buf_sz);
@@ -2252,7 +2252,7 @@ obj_ec_recov_task_init(struct obj_reasb_req *reasb_req, daos_obj_id_t oid,
 			rtask->ert_epoch = recx_ep == NULL ?
 					   reasb_req->orr_epoch.oe_value :
 					   recx_ep->re_ep;
-			rc = daos_sgl_init(&rtask->ert_sgl, 1);
+			rc = d_sgl_init(&rtask->ert_sgl, 1);
 			if (rc)
 				goto out;
 			buf_sz = stripe_nr * stripe_total_sz;

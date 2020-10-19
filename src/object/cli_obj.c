@@ -663,7 +663,7 @@ obj_reasb_req_fini(struct obj_reasb_req *reasb_req, uint32_t iod_nr)
 			return;
 		if (iod->iod_recxs != NULL)
 			D_FREE(iod->iod_recxs);
-		daos_sgl_fini(reasb_req->orr_sgls + i, false);
+		d_sgl_fini(reasb_req->orr_sgls + i, false);
 		obj_io_desc_fini(reasb_req->orr_oiods + i);
 		obj_ec_recxs_fini(&reasb_req->orr_recxs[i]);
 		obj_ec_seg_sorter_fini(&reasb_req->orr_sorters[i]);
@@ -2534,7 +2534,7 @@ shard_list_task_fini(tse_task_t *task, void *arg)
 	shard_arg->la_recxs = NULL;
 	shard_arg->la_kds = NULL;
 	if (shard_arg->la_sgl != NULL && shard_arg->la_sgl != obj_arg->sgl)
-		daos_sgl_fini(shard_arg->la_sgl, false);
+		d_sgl_fini(shard_arg->la_sgl, false);
 
 	return 0;
 }

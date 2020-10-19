@@ -973,7 +973,7 @@ migrate_fetch_update_bulk(struct migrate_one *mrone, daos_handle_t oh,
 post:
 	for (i = 0; i < sgl_cnt; i++) {
 		sgl = &sgls[i];
-		daos_sgl_fini(sgl, false);
+		d_sgl_fini(sgl, false);
 	}
 
 	if (DAOS_OC_IS_EC(oca))
@@ -1154,7 +1154,7 @@ migrate_one_destroy(struct migrate_one *mrone)
 
 	if (mrone->mo_sgls) {
 		for (i = 0; i < mrone->mo_iod_alloc_num; i++)
-			daos_sgl_fini(&mrone->mo_sgls[i], true);
+			d_sgl_fini(&mrone->mo_sgls[i], true);
 		D_FREE(mrone->mo_sgls);
 	}
 

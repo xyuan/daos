@@ -48,7 +48,7 @@ rebuild_iv_alloc_internal(d_sg_list_t *sgl)
 {
 	int	rc;
 
-	rc = daos_sgl_init(sgl, 1);
+	rc = d_sgl_init(sgl, 1);
 	if (rc)
 		return rc;
 
@@ -58,7 +58,7 @@ rebuild_iv_alloc_internal(d_sg_list_t *sgl)
 	sgl->sg_iovs[0].iov_buf_len = sizeof(struct rebuild_iv);
 free:
 	if (rc)
-		daos_sgl_fini(sgl, true);
+		d_sgl_fini(sgl, true);
 	return rc;
 }
 
@@ -92,7 +92,7 @@ rebuild_iv_ent_put(struct ds_iv_entry *entry, void **priv)
 static int
 rebuild_iv_ent_destroy(d_sg_list_t *sgl)
 {
-	daos_sgl_fini(sgl, true);
+	d_sgl_fini(sgl, true);
 	return 0;
 }
 

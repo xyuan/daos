@@ -245,7 +245,7 @@ bio_sgl_fini(struct bio_sglist *sgl)
 
 /*
  * Convert bio_sglist into d_sg_list_t, caller is responsible to
- * call daos_sgl_fini(sgl, false) to free iovs.
+ * call d_sgl_fini(sgl, false) to free iovs.
  */
 static inline int
 bio_sgl_convert(struct bio_sglist *bsgl, d_sg_list_t *sgl, bool deduped_skip)
@@ -255,7 +255,7 @@ bio_sgl_convert(struct bio_sglist *bsgl, d_sg_list_t *sgl, bool deduped_skip)
 	D_ASSERT(sgl != NULL);
 	D_ASSERT(bsgl != NULL);
 
-	rc = daos_sgl_init(sgl, bsgl->bs_nr_out);
+	rc = d_sgl_init(sgl, bsgl->bs_nr_out);
 	if (rc != 0)
 		return -DER_NOMEM;
 

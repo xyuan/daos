@@ -724,7 +724,7 @@ clear_iod_csum(struct dcs_iod_csums *iod_csum)
 		return;
 
 	for (i = 0; i < iod_csum->ic_nr; i++)
-		D_FREE(iod_csum->ic_data->cs_csum);
+		D_FREE(iod_csum->ic_data[i].cs_csum);
 
 	D_FREE(iod_csum->ic_data);
 }
