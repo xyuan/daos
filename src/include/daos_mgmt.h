@@ -391,12 +391,13 @@ int
 daos_mgmt_add_mark(const char *mark);
 
 /**
- * Query internal blobstore state for given blobstore uuid in the specified DAOS system.
+ * Query internal blobstore state for given blobstore uuid in the specified
+ * DAOS system.
  *
  * \param group		  [IN]	Name of DAOS system managing the service.
  * \param blobstore_uuid  [IN]	UUID of the blobstore to query.
- * \param blobstore_state [OUT] Will return an enum integer that wil later be converted to
- *				a blobstore state:
+ * \param blobstore_state [OUT] Will return an enum integer that will
+ * 				later be converted to a blobstore state:
  *				SETUP, NORMAL, FAULTY, TEARDOWN, or OUT
  * \param ev		  [IN]  Completion event. Optional and can be NULL.
  *				The function will run in blocking mode
