@@ -531,8 +531,8 @@ do_insert(struct dyn_hash *htable, const void *key,
 		}
 		if (rc >= 0 && mode == DH_LOOKUP_INSERT) {
 			*item = bucket->field[rc].record;
-			htable->ht_rw_unlock(htable);
 			htable->ht_ops.hop_rec_addref(htable->gtable, *item);
+			htable->ht_rw_unlock(htable);
 			D_GOTO(out, rc = 0);
 		}
 	}
@@ -587,8 +587,8 @@ do_insert(struct dyn_hash *htable, const void *key,
 #endif
 	htable->ht_rw_unlock(htable);
 	add_record(bucket, siphash, data);
-	htable->bucket_unlock(htable, bucket);
 	htable->ht_ops.hop_rec_addref(htable->gtable, *item);
+	htable->bucket_unlock(htable, bucket);
 out:
 	return rc;
 }
@@ -904,13 +904,15 @@ dyn_hash_rec_find(struct d_hash_table *gtable, const void *key,
 	if (rc >= 0) {
 		item = bucket->field[rc].record;
 	}
-	htable->bucket_unlock(htable, bucket);
 	
 	if (item != NULL) {
 		htable->ht_ops.hop_rec_addref(gtable, item);
+		htable->bucket_unlock(htable, bucket);
 		if(sip_update) {
 			htable->ht_ops.hop_siphash_set(item, siphash);
 		}
+	} else {
+		htable->bucket_unlock(htable, bucket);
 	}
 	return item;
 }
@@ -1005,6 +1007,9 @@ dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 			dont_free_bucket = true;
 		}
 		shrink_vector(htable, bucket, index);
+		if (rc && htable->ht_ops.hop_rec_decref(gtable, item)) {
+			htable->ht_ops.hop_rec_free(gtable, item);
+		}
 		htable->bucket_unlock(htable, bucket);
 		htable->ht_rw_unlock(htable);
 		if (!dont_free_bucket) {
@@ -1019,12 +1024,12 @@ dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 	            bucket_idx++;
 	        }
 	        bucket->counter--;
+		if (rc && htable->ht_ops.hop_rec_decref(gtable, item)) {
+			htable->ht_ops.hop_rec_free(gtable, item);
+		}
 	        htable->bucket_unlock(htable, bucket);
 	}
 out:
-	if (rc && htable->ht_ops.hop_rec_decref(gtable, item)) {
-		htable->ht_ops.hop_rec_free(gtable, item);
-	}
 	return rc;
 }
 
