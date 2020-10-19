@@ -1215,18 +1215,18 @@ out:
 int wait_and_verify_blobstore_state(uuid_t bs_uuid, char *expected_state,
 				    const char *group)
 {
-	int	blobstore_state;
+	int	bs_state;
 	int	retry_cnt;
 	int	rc;
 
 	retry_cnt = 0;
 	while (retry_cnt <= MAX_BS_STATE_RETRY) {
-		rc = daos_mgmt_get_bs_state(group, bs_uuid, &blobstore_state,
+		rc = daos_mgmt_get_bs_state(group, bs_uuid, &bs_state,
 					    NULL /*ev*/);
 		if (rc)
 			return rc;
 
-		if (verify_blobstore_state(blobstore_state, expected_state) == 0)
+		if (verify_blobstore_state(bs_state, expected_state) == 0)
 			return 0;
 
 		sleep(MAX_BS_STATE_WAIT);

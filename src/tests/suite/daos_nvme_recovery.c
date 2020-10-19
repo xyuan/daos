@@ -340,8 +340,8 @@ nvme_test_get_blobstore_state(void **state)
 	 * 'dmg storage set nvme-faulty'.
 	 */
 	print_message("NVMe with UUID=%s on host=%s\" set to Faulty\n",
-			DP_UUID(devices[0].device_id),
-			devices[0].host);
+		      DP_UUID(devices[0].device_id),
+		      devices[0].host);
 	rc = dmg_storage_set_nvme_fault(dmg_config_file, devices[0].host,
 					devices[0].device_id, 1);
 	assert_int_equal(rc, 0);
@@ -365,7 +365,7 @@ static const struct CMUnitTest nvme_recov_tests[] = {
 	 nvme_recov_1, NULL, test_case_teardown},
 	{"NVMe Recovery 2: Verify device states after NVMe set to Faulty",
 	 nvme_test_verify_device_stats, NULL, test_case_teardown},
-	{"NVMe Recovery 3: Verify blobstore device state NORMAL->OUT transition",
+	{"NVMe Recovery 3: Verify blobstore state NORMAL->OUT transition",
 	 nvme_test_get_blobstore_state, NULL, test_case_teardown},
 };
 

@@ -90,8 +90,8 @@ int ds_mgmt_get_bs_state(uuid_t bs_uuid, int *bs_state)
 	/* Create a ULT on the tgt_id */
 	D_DEBUG(DB_MGMT, "Starting ULT on tgt_id:%d\n", tgt_id);
 	/* TODO Add a new DSS_ULT_BIO tag */
-	rc = dss_ult_create(bs_state_query, (void *)bs_state, DSS_ULT_GC, tgt_id, 0,
-			    &thread);
+	rc = dss_ult_create(bs_state_query, (void *)bs_state, DSS_ULT_GC,
+			    tgt_id, 0, &thread);
 	if (rc != 0) {
 		D_ERROR("Unable to create a ULT on tgt_id:%d\n", tgt_id);
 		goto out;

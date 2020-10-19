@@ -344,10 +344,12 @@ int dmg_storage_set_nvme_fault(const char *dmg_config_file,
  * defined in bio.h.
  *
  * \param state	    [IN]    Blobstore state return from daos_mgmt_ger_bs_state()
- * \param state_str [IN]    Assumed blobstore state (ie normal, out, faulty, teardown, setup)
+ * \param state_str [IN]    Assumed blobstore state (ie normal, out, faulty,
+ * 					teardown, setup)
  *
  * \return		0 on success
- *			1 on failure, meaning the enum definition differs from expected state
+ *			1 on failure, meaning the enum definition differs from
+ *					expected state
  */
 int verify_blobstore_state(int state, const char *state_str);
 

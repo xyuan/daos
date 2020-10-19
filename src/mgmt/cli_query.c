@@ -126,7 +126,7 @@ dc_mgmt_get_bs_state(tse_task_t *task)
 	if (rc != 0)
 		D_GOTO(out_put_req, rc);
 
-	D_DEBUG(DB_MGMT, "getting internal blobstore state in DAOS system: %s\n",
+	D_DEBUG(DB_MGMT, "getting internal blobstore state in DAOS system:%s\n",
 		args->grp);
 
 	/** send the request */
