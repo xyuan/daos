@@ -1020,6 +1020,9 @@ dyn_hash_rec_delete(struct d_hash_table *gtable, const void *key,
 			htable->ht_ops.hop_rec_free(gtable, item);
 	}
 	htable->bucket_unlock(htable, bucket);
+	if (free_bucket) {
+		D_FREE(bucket);
+	}
 out:
 	return rc;
 }
