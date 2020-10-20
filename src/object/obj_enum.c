@@ -705,17 +705,6 @@ dss_enum_unpack_io_init(struct dss_enum_unpack_io *io, daos_unit_oid_t oid,
 }
 
 static void
-clear_iod(daos_iod_t *iod, d_sg_list_t *sgl, int *recxs_cap)
-{
-	daos_iov_free(&iod->iod_name);
-	D_FREE(iod->iod_recxs);
-	memset(iod, 0, sizeof(*iod));
-
-	d_sgl_fini(sgl, false);
-
-	*recxs_cap = 0;
-}
-static void
 clear_iod_csum(struct dcs_iod_csums *iod_csum)
 {
 	int i;
@@ -744,16 +733,22 @@ dss_enum_unpack_io_clear(struct dss_enum_unpack_io *io)
 
 		if (io->ui_sgls != NULL)
 			sgl = &io->ui_sgls[i];
-		clear_iod_csum(io_iod_csums(io, i));
-		clear_iod(&io->ui_iods[i], sgl, &io->ui_recxs_caps[i]);
-	}
+		d_sgl_fini(sgl, false);
 
-	if (io->ui_akey_punch_ephs)
+		clear_iod_csum(io_iod_csums(io, i));
+
+		daos_iov_free(&io->ui_iods[i].iod_name);
+		D_FREE(io->ui_iods[i].iod_recxs);
+	}
+	memset(io->ui_iods, 0, sizeof(*io->ui_iods) * io->ui_iods_cap);
+	memset(io->ui_recxs_caps, 0,
+	       sizeof(*io->ui_recxs_caps) * io->ui_iods_cap);
+	if (io->ui_akey_punch_ephs != NULL)
 		memset(io->ui_akey_punch_ephs, 0,
-		       sizeof(daos_epoch_t) * io->ui_iods_cap);
-	if (io->ui_rec_punch_ephs)
+		       sizeof(*io->ui_akey_punch_ephs) * io->ui_iods_cap);
+	if (io->ui_rec_punch_ephs != NULL)
 		memset(io->ui_rec_punch_ephs, 0,
-		       sizeof(daos_epoch_t) * io->ui_iods_cap);
+		       sizeof(*io->ui_rec_punch_ephs) * io->ui_iods_cap);
 	io->ui_dkey_punch_eph = 0;
 	io->ui_iods_top = -1;
 	io->ui_version = 0;
@@ -784,10 +779,18 @@ clear_top_iod(struct dss_enum_unpack_io *io)
 		d_sg_list_t *sgl = NULL;
 
 		D_DEBUG(DB_IO, "iod without recxs: %d\n", idx);
+
 		if (io->ui_sgls != NULL)
 			sgl = &io->ui_sgls[idx];
+		d_sgl_fini(sgl, false);
+
 		clear_iod_csum(io_iod_csums(io, idx));
-		clear_iod(&io->ui_iods[idx], sgl, &io->ui_recxs_caps[idx]);
+
+		daos_iov_free(&io->ui_iods[idx].iod_name);
+		D_FREE(io->ui_iods[idx].iod_recxs);
+		memset(&io->ui_iods[idx], 0, sizeof(*io->ui_iods));
+
+		io->ui_recxs_caps[idx] = 0;
 		io->ui_iods_top--;
 	}
 }
