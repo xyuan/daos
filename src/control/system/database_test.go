@@ -316,6 +316,7 @@ func TestSystem_Database_SnapshotRestore(t *testing.T) {
 
 	cmpOpts := []cmp.Option{
 		cmpopts.IgnoreUnexported(dbData{}, Member{}),
+		cmp.AllowUnexported(FaultDomain{}),
 		cmpopts.IgnoreFields(dbData{}, "RWMutex"),
 	}
 	if diff := cmp.Diff(db0.data, db1.data, cmpOpts...); diff != "" {

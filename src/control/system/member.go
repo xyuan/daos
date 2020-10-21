@@ -137,21 +137,28 @@ type Member struct {
 	FabricContexts uint32
 	state          MemberState
 	Info           string
+	FaultDomain    *FaultDomain
 }
 
 // MarshalJSON marshals system.Member to JSON.
 func (sm *Member) MarshalJSON() ([]byte, error) {
+	if sm == nil {
+		return nil, errors.New("tried to marshal nil Member")
+	}
+
 	// use a type alias to leverage the default marshal for
 	// most fields
 	type toJSON Member
 	return json.Marshal(&struct {
-		Addr  string
-		State int
+		Addr        string
+		State       int
+		FaultDomain string
 		*toJSON
 	}{
-		Addr:   sm.Addr.String(),
-		State:  int(sm.state),
-		toJSON: (*toJSON)(sm),
+		Addr:        sm.Addr.String(),
+		State:       int(sm.state),
+		FaultDomain: sm.FaultDomain.String(),
+		toJSON:      (*toJSON)(sm),
 	})
 }
 
@@ -165,8 +172,9 @@ func (sm *Member) UnmarshalJSON(data []byte) error {
 	// most fields
 	type fromJSON Member
 	from := &struct {
-		Addr  string
-		State int
+		Addr        string
+		State       int
+		FaultDomain string
 		*fromJSON
 	}{
 		fromJSON: (*fromJSON)(sm),
@@ -184,6 +192,12 @@ func (sm *Member) UnmarshalJSON(data []byte) error {
 
 	sm.state = MemberState(from.State)
 
+	fd, err := NewFaultDomainFromString(from.FaultDomain)
+	if err != nil {
+		return err
+	}
+	sm.FaultDomain = fd
+
 	return nil
 }
 
@@ -199,6 +213,12 @@ func (sm *Member) State() MemberState {
 // WithInfo adds info field and returns updated member.
 func (sm *Member) WithInfo(msg string) *Member {
 	sm.Info = msg
+	return sm
+}
+
+// WithFaultDomain adds the fault domain field and returns the updated member.
+func (sm *Member) WithFaultDomain(fd *FaultDomain) *Member {
+	sm.FaultDomain = fd
 	return sm
 }
 

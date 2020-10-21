@@ -92,6 +92,9 @@ func TestSystem_NewFaultDomainFromString(t *testing.T) {
 		expErr    error
 		expResult *FaultDomain
 	}{
+		"nil": {
+			input: FaultDomainNilStr,
+		},
 		"empty": {
 			expResult: &FaultDomain{},
 		},
@@ -168,7 +171,7 @@ func TestSystem_FaultDomain_String(t *testing.T) {
 		expStr string
 	}{
 		"nil": {
-			expStr: "",
+			expStr: "(nil)",
 		},
 		"empty": {
 			domain: &FaultDomain{},

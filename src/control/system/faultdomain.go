@@ -28,9 +28,14 @@ import (
 	"strings"
 )
 
-// FaultDomainSeparator is the dividing character for different levels of a
-// fault domain.
-const FaultDomainSeparator = "/"
+const (
+	// FaultDomainSeparator is the dividing character for different levels of a
+	// fault domain.
+	FaultDomainSeparator = "/"
+
+	// FaultDomainNilStr is the string value of a nil FaultDomain.
+	FaultDomainNilStr = "(nil)"
+)
 
 // FaultDomain represents a multi-layer fault domain.
 type FaultDomain struct {
@@ -38,6 +43,9 @@ type FaultDomain struct {
 }
 
 func (f *FaultDomain) String() string {
+	if f == nil {
+		return FaultDomainNilStr
+	}
 	if f.Empty() {
 		return ""
 	}
@@ -129,6 +137,10 @@ func NewFaultDomainFromString(domainStr string) (*FaultDomain, error) {
 	domainStr = strings.TrimSpace(domainStr)
 	if len(domainStr) == 0 {
 		return &FaultDomain{}, nil
+	}
+
+	if domainStr == FaultDomainNilStr {
+		return nil, nil
 	}
 
 	if !strings.HasPrefix(domainStr, FaultDomainSeparator) {
