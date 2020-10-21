@@ -394,7 +394,7 @@ crt_proc_struct_daos_recx_ep_list(crt_proc_t proc,
 
 	switch (proc_op) {
 	case CRT_PROC_DECODE:
-		D_MM_ALLOC_ARRAY(list->re_items, list->re_nr);
+		D_ALLOC_ARRAY(list->re_items, list->re_nr);
 		if (list->re_items == NULL)
 			return -DER_NOMEM;
 		list->re_total = list->re_nr;
